@@ -30,4 +30,4 @@ Correctness and recovery work from the improvement review. Reload the extension 
 
 ### Validation / remaining work
 
-Node checks and packaging pass. Chromium execution was blocked in the implementation sandbox by browser download/system-library availability; browser tests and authorized live Arena smoke testing remain required. See [implementation status](docs/IMPLEMENTATION-STATUS.md) for precise coverage and the remaining roadmap. No fivefold performance improvement is claimed.
+Node checks and packaging pass. Chromium execution was blocked in the implementation sandbox by browser download/system-library availability, but all four Chromium fixture tests subsequently passed in GitHub Actions after correcting a test-harness import context. Authorized live Arena smoke testing remains required. See [implementation status](docs/IMPLEMENTATION-STATUS.md) for precise coverage and the remaining roadmap. No fivefold performance improvement is claimed.

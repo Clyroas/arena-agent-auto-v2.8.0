@@ -9,7 +9,7 @@ This is a correctness/recovery release, **not completion of the entire roadmap a
 | Review area | Changes | Verification |
 |---|---|---|
 | Exact File identity | Validation carries source indexes; the panel retains exact original File references. MIME normalization no longer causes a rematch. Overflow and all-invalid selections remain visible. | Policy, attachment-state and actual panel-handler regression tests. |
-| Repeated injection | Attachment policy is an IIFE with immutable, version-aware registration; repeated evaluation is safe and stale registration is replaceable. Adapter/version anchors updated to 2.8.2. | Shared classic-script VM tests; Chromium isolated-world test added, execution blocked locally (see below). |
+| Repeated injection | Attachment policy is an IIFE with immutable, version-aware registration; repeated evaluation is safe and stale registration is replaceable. Adapter/version anchors updated to 2.8.2. | Shared classic-script VM tests; Chromium isolated-world test passes in CI; local browser execution remains blocked (see below). |
 | Byte lifetime | No encoded payload is stored on panel turns. Local payloads are released in finally blocks; original Files are released on acceptance, completion, cancellation, interruption and terminal errors, or returned once to an explicitly unsent local draft. Main-world insertion uses the native FileList setter, not an own-property override. | Attachment-state, panel and serialized main-world helper tests. Native Chrome test added. |
 | Staging deadline/cancellation | Content-side STAGE_FILES wait is bounded to 10 seconds and abortable. Cancellation/timeout removes its marker. Worker clamps expiry to its single-use grant. Main-world helper rechecks token, connection and expiry immediately before native insertion. Late completion cannot trigger Send. | Timeout/cancel/late-response content tests, serialized helper tests. |
 | Connection/history escape paths | Handshake starts after ATTACH; an Arena dialog gets a bounded 120-second window. Dedicated Open Arena / Cancel connection buttons bypass the global busy lock. History loading times out after 15 seconds and ignores late responses. | Client and panel tests; browser dialog cancellation test added. |
@@ -39,6 +39,7 @@ npm run test:browser
 - Packaging succeeds and includes the CSS SVG dependencies. `dist/`, browser traces/results, and dependencies are ignored by Git.
 - Four browser tests are discoverable: full-bundle repeated injection, real file staging/one Send/reconnect, expired staging refusal, and dialog-wait cancellation.
 - **Browser execution is not verified in this workspace.** Playwright's Chromium download failed with a TLS connection reset. An alternate local headless binary also lacked required system libraries. `npm run test:browser` failed at browser launch, before application assertions. The committed CI job installs Chromium and its system dependencies before running those tests.
+- **CI browser validation subsequently passed:** all four Chromium tests pass in [GitHub Actions run 36138378920](https://github.com/Clyroas/arena-agent-auto-v2.8.0/actions/runs/36138378920). The initial CI failure was a test-harness dynamic import in `ServiceWorkerGlobalScope`; importing the packaged helper from the extension page fixes it without weakening any assertions. The real helper still executes in the Arena fixture’s MAIN world. GitHub annotations now expose future failure details independently of artifact downloads.
 - No signed-in Arena automation, credentials, private transcripts, or live-site compatibility claims are involved. Browser tests intercept web requests with a synthetic fixture.
 
 ## Important boundaries
@@ -51,7 +52,7 @@ npm run test:browser
 
 ## Still open / next batches
 
-1. Complete browser validation and extend fixtures to Direct, response pairs, clarification answers, worker suspension, screenshot permissions and extension updates.
+1. Extend the passing four-test Chromium suite to Direct, response pairs, clarification answers, worker suspension, screenshot permissions and extension updates; perform an authorized live-site smoke test.
 2. Obtain evidence for Arena's upload completion/error UI and add bounded per-file acknowledgement without guessing.
 3. Extract the broader session state machine and typed/validated message contracts. This release only extracts attachment ownership and tab-awake lifecycle helpers.
 4. Split/maintain Agent and Direct DOM adapters; strengthen semantic capability diagnostics and tested virtualization behavior.
