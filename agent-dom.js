@@ -639,8 +639,9 @@
       const allowedButtons = new Set([...buttons, ...submits, ...skip]);
       if ([...root.querySelectorAll('button')].filter(visible).some(button => !allowedButtons.has(button))) continue;
       const sensitive = /\b(captcha|verification|password|credential|secret|token|sign[ -]?in|log[ -]?in|permission|approv\w*|authoriz\w*|payment|purchase|delete|destructive|execut\w*)\b|\brun\b.{0,35}\b(command|script|code|bash|shell)\b/i.test([question,...options.map(o=>o.label+' '+o.description)].join(' '));
-      const readOnly = sensitive || options.some(option => option.checked);
-      const data = { rowId: row.getAttribute('data-chat-message-id'), question, options, custom, readOnly,
+      const answered = options.some(option => option.checked);
+      const readOnly = sensitive || answered;
+      const data = { rowId: row.getAttribute('data-chat-message-id'), question, options, custom, readOnly, answered, sensitive,
         reason: sensitive ? 'This may be an approval, sensitive action or security question. Handle it in Arena.' : readOnly ? 'An option is already selected in Arena. Wait there or check its state.' : '' };
       found.push({ root, group, buttons, input: custom ? inputs[0] : null, submit: custom ? submits[0] : null, data, fingerprint: JSON.stringify(data) });
     }
@@ -838,9 +839,18 @@
       return { row, questions: questionsFor(row.el), tools: toolActivity(row.el), text };
     });
     const cardGroups = item => [...item.row.el.querySelectorAll('[role="radiogroup"]')].filter(group => visible(group) && !group.closest('.prose,pre,code')).length;
-    // Only recognized clarification/tool-only rows may surround the one prose reply. An unanswered
-    // or unrecognized question card is interaction UI, never a competing final reply candidate.
-    const interaction = item => item.questions.length || cardGroups(item) > 0;
+    // v2.8.1: an answered clarification row is history, not a competing reply. After the user picks an
+    // option (here or in Arena), Arena may hide or remove that card while its preamble text stays in the
+    // row. Without remembering it, the old row looks like a plain reply and the new answer makes two,
+    // which used to stop capture with AMBIGUOUS_REPLY. Rows that ever held a recognized card (tracked in
+    // tx.questionRows across scans, or passed back on WATCH resume) stay interaction rows forever, as do
+    // rows that still carry any card remnants outside prose (visible or hidden) for resumes without history.
+    const knownQuestions = new Set(Array.isArray(tx.questionRows) ? tx.questionRows.filter(id => typeof id === 'string') : []);
+    const hasRemnants = el => [...el.querySelectorAll('[role="radiogroup"],button[role="radio"],input[placeholder="Revise options or write your own..."]')]
+      .some(node => !node.closest('.prose,pre,code,nav,aside,[role="dialog"]'));
+    // Only recognized clarification/tool-only rows may surround the one prose reply. An unanswered,
+    // unrecognized or already-answered question card is interaction UI, never a competing final reply candidate.
+    const interaction = item => item.questions.length > 0 || cardGroups(item) > 0 || knownQuestions.has(item.row.id) || hasRemnants(item.row.el);
     const replyLike = item => !item.pair && !item.stale && !interaction(item) && (!!item.text || ended(item.row.el));
     const replies = classified.filter(replyLike);
     if (replies.length > 1) fail('AMBIGUOUS_REPLY', `Multiple ungrouped assistant replies followed this prompt. Read the result in Arena; capture stopped rather than guessing.${rowSummary(added, list.length)}`);
@@ -863,8 +873,14 @@
       }
     }
     const reply = replies[0];
-    if (reply && tx.assistantId && tx.assistantId !== reply.row.id)
-      fail('AMBIGUOUS_REPLY', 'The assistant message ID changed. Capture stopped.');
+    if (reply && tx.assistantId && tx.assistantId !== reply.row.id) {
+      // The preamble row can look like a plain reply before its cards render (assistantId points at it),
+      // then become a question row once they do. When the previously tracked row is now history, the new
+      // reply takes over; any other ID change is still a hard stop.
+      const prev = classified.find(item => item.row.id === tx.assistantId);
+      if (!prev || (!prev.stale && !prev.pair && !interaction(prev) && !knownQuestions.has(tx.assistantId)))
+        fail('AMBIGUOUS_REPLY', 'The assistant message ID changed. Capture stopped.');
+    }
     const questions = classified.flatMap(item => item.questions);
     if (questions.length > 12) fail('TOO_MANY_QUESTIONS', 'More than twelve clarification cards are visible. Continue in Arena.');
     const liveText = classified.map(item => item.text).filter(Boolean).join('\n\n');
@@ -889,7 +905,17 @@
       const chosen = choice && choice !== 'skip' && pair.sides.find(side => side.side === choice);
       if (chosen && settled && chosen.done && !running(doc)) { pairDone = true; pairText = chosen.text; pairModel = chosen.label; pairEl = chosen.el; }
     }
-    const complete = pairDone || (!!reply && ended(reply.row.el) && !running(doc) && !questions.length && !classified.some(item => cardGroups(item) > 0));
+    // An answered card (an option already checked in Arena) no longer blocks completion: the agent has
+    // what it asked for and the turn can finish. Unanswered cards (including sensitive ones the panel
+    // never touches) and unrecognized card groups still do.
+    const pendingQuestions = questions.filter(q => !q.data.answered);
+    const pendingCards = classified.some(item => {
+      const groups = cardGroups(item);
+      if (!groups) return false;
+      if (groups > item.questions.length) return true;
+      return item.questions.some(q => !q.data.answered);
+    });
+    const complete = pairDone || (!!reply && ended(reply.row.el) && !running(doc) && !pendingQuestions.length && !pendingCards);
     // The formatted version is only built for a finished reply (it is what the panel keeps).
     const rich = complete ? richOf(pairDone ? pairEl : reply.row.el) : null;
     // v2.8.0: the live preview is formatted too. Rebuilt only when the text changed, at most about twice a
@@ -954,7 +980,7 @@
     try { return rows(doc).filter(row => row.user).length; } catch { return 0; }
   }
 
-  globalThis.ArenaAgentDOM = { version: '2.8.0', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
+  globalThis.ArenaAgentDOM = { version: '2.8.1', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
     richOf, userRowText, userRowMatches, composer, sendButton, enabled, reviewPanel, conversationReady, inspectControls, preflight, matchTurn, questionsFor, toolActivity, thinkingStatus, historyTurns, historyCount, answerText, normalize, composerText, writeComposer, composerSummary, fileInputsFor, composerFileInputs, uploadsFor, stageRequestFor, nearComposer, promptMatches,
     pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide };
 })();

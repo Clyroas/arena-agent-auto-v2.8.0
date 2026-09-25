@@ -1,6 +1,6 @@
 # Architecture
 
-How Arena Auto Chat 2.8.0 is put together: the three Chrome contexts, the wire between them, and
+How Arena Auto Chat 2.8.1 is put together: the three Chrome contexts, the wire between them, and
 the paths a message, a file and a screenshot take. Companion to [STABILITY-REVIEW.md](../STABILITY-REVIEW.md),
 which documents why the guarantees below exist.
 
@@ -25,7 +25,7 @@ Two structural decisions shape everything else:
 
 ## The wire
 
-The version string is part of the protocol (`ADAPTER_VERSION` / `VERSION` = `2.8.0`, anchored in ten
+The version string is part of the protocol (`ADAPTER_VERSION` / `VERSION` = `2.8.1`, anchored in ten
 places and checked by `test/version-sync.test.mjs`). The panel refuses an adapter that reports a
 different version, and the worker refuses a page whose injected script did not register.
 

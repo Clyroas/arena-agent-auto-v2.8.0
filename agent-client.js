@@ -4,7 +4,7 @@
 // idle worker can no longer drop the chat connection.
 import { withTimeout } from './core.js';
 
-export const ADAPTER_VERSION = '2.8.0';
+export const ADAPTER_VERSION = '2.8.1';
 export const HEARTBEAT_MS = 10000;
 // Worker requests made while a Send is being prepared must not wait forever: the panel would otherwise
 // stay in “Sending…” with the staged bytes held in memory. Both are bounded well below the point where a
@@ -104,9 +104,10 @@ export class AgentClient {
     this.post({ type: 'SEND', requestId, prompt, url, ...(attachments?.length ? { attachments } : {}) });
   }
   // Resume tracking an already-accepted message after a reconnect. Read-only: never clicks or resends.
-  watch(requestId, prompt, userMessageId, url, hadAttachments) {
+  watch(requestId, prompt, userMessageId, url, hadAttachments, knownQuestionRows) {
     if (this.closed || !this.ready) throw new Error('The Arena connection is not ready.');
-    this.post({ type: 'WATCH', requestId, prompt, userMessageId, url, hadAttachments: !!hadAttachments });
+    this.post({ type: 'WATCH', requestId, prompt, userMessageId, url, hadAttachments: !!hadAttachments,
+      ...(Array.isArray(knownQuestionRows) && knownQuestionRows.length ? { knownQuestionRows: knownQuestionRows.filter(id => typeof id === 'string').slice(0, 64) } : {}) });
   }
   answer(requestId, answer) {
     if (this.closed || !this.ready) throw new Error('The Arena connection is not ready.');

@@ -12,7 +12,7 @@ and dev-only.
 | Script | Does |
 |--------|------|
 | `npm run lint` | ESLint (flat config in `eslint.config.mjs`) |
-| `npm test` | `node --test "test/**/*.test.mjs"` — 92 tests |
+| `npm test` | `node --test "test/**/*.test.mjs"` — 98 tests |
 | `npm run check` | Both, in that order — what CI runs |
 
 ## Tests
@@ -28,6 +28,7 @@ The suites cover the pure helpers plus the paths that used to be untestable:
 | `conversation-view.test.mjs` | Transcript rendering against the real `panel.html` markup contract — which element each state toggle lives on (also what the motion layer keys off) |
 | `live-view.test.mjs` | The moving parts of a turn: preview text, tool rows, question cards, response pairs |
 | `live-status.test.mjs` | "Last change N ago" status derivation |
+| `question-history.test.mjs` | Answered clarification rows stay history (not a second reply): remembered IDs, hidden remnants, answered-vs-unanswered completion, resume handover |
 | `rich-view.test.mjs` | Markdown/code rendering |
 | `screenshot.test.mjs` | Capture pipeline maths: slicing, caps, stitching decisions |
 | `preferences.test.mjs` | Whitelist-normalization of theme/text-size/accent prefs |
