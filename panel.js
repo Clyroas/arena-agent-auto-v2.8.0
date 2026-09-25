@@ -1,7 +1,7 @@
 import { setupFloatingGeometry } from './window-geometry.js';
 import { ConversationView } from './conversation-view.js';
 import { AgentClient } from './agent-client.js';
-import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl } from './core.js';
+import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl, withTimeout } from './core.js';
 import { liveStatus } from './live-status.js';
 import { recentModels, rememberModel } from './recent-models.js';
 import { findLinks, hostLabel, captureLink, hasShotAccess, requestShotAccess, removeShotAccess } from './screenshot.js';
@@ -19,8 +19,20 @@ let shotAccess = false, shotBusy = '', shotProgress = '', shotSignature = ''; //
 const shotDone = new Set();
 $('attachment-input').accept = ATTACHMENT_POLICY.accept;
 const labels = { disconnected: 'Disconnected', connecting: 'Checking controls…', reconnecting: 'Reconnecting…', ready: 'Auto ready', sending: 'Sending…', waiting: 'Waiting for Arena', error: 'Stopped · check tab' };
+// One-shot worker requests are always bounded (see withTimeout in core.js). A suspended, restarting or
+// updated service worker must never leave this panel permanently busy: a late answer is ignored and the
+// caller gets a clear error it can show, instead of a spinner that never ends.
+const RPC_TIMEOUT_MS = 20000;
 const rpc = async (type, extra = {}) => {
-  const result = await chrome.runtime.sendMessage({ type, ...extra });
+  let result;
+  try {
+    result = await withTimeout(chrome.runtime.sendMessage({ type, ...extra }), RPC_TIMEOUT_MS,
+      `${type} did not answer within ${Math.round(RPC_TIMEOUT_MS / 1000)} seconds. Chrome may have restarted the extension worker. Reload the Arena tab and try again; nothing was sent to Arena.`);
+  } catch (error) {
+    if (error?.name === 'TimeoutError') throw error;
+    // Most often “Extension context invalidated”: the panel outlived an extension reload/update.
+    throw new Error(`${type} could not reach the extension worker (${error?.message || 'no response'}). Reload this panel with the extension’s Reload button and try again; nothing was sent to Arena.`);
+  }
   if (!result?.ok) throw new Error(result?.error || 'The extension worker did not respond. Reload the extension and Arena tab.');
   return result.value;
 };
@@ -174,16 +186,22 @@ function clear() {
   notice(); render();
 }
 function hasContent() { return !!(turns.length || $('prompt').value || staged.length); }
-function askConfirm(title, text, ok = 'Continue', cancel = 'Cancel') {
+// Exactly one confirmation may be open at a time. showModal() throws InvalidStateError on an
+// already-open dialog, which used to surface as an unhandled rejection and could lose the answer meant
+// for the first caller (two rapid clicks on a choice, or on a model option). A second request is simply
+// treated as “not confirmed” — it never overwrites the pending one and never throws.
+function showConfirm({ title, text, ok, cancel }) {
+  const dialog = $('confirm-dialog');
+  if (dialog.open || dialogResolve) return Promise.resolve(false);
   $('dialog-title').textContent = title; $('dialog-description').textContent = text;
-  $('dialog-ok').textContent = ok; $('dialog-cancel').textContent = cancel; $('confirm-dialog').showModal();
+  $('dialog-ok').textContent = ok; $('dialog-cancel').textContent = cancel;
+  try { dialog.showModal(); } catch { return Promise.resolve(false); }
   return new Promise(resolve => { dialogResolve = resolve; });
 }
+function askConfirm(title, text, ok = 'Continue', cancel = 'Cancel') { return showConfirm({ title, text, ok, cancel }); }
 function askClear(text) {
   if (!hasContent()) return Promise.resolve(true);
-  $('dialog-title').textContent = 'Clear this session?'; $('dialog-ok').textContent = 'Continue'; $('dialog-cancel').textContent = 'Keep session';
-  $('dialog-description').textContent = text; $('confirm-dialog').showModal();
-  return new Promise(resolve => { dialogResolve = resolve; });
+  return showConfirm({ title: 'Clear this session?', text, ok: 'Continue', cancel: 'Keep session' });
 }
 function closeDialog(value) { $('confirm-dialog').close(); dialogResolve?.(value); dialogResolve = null; }
 $('dialog-ok').onclick = () => closeDialog(true);
@@ -233,6 +251,7 @@ function renderModelList() {
 }
 function openModelDialog() {
   if ($('model-chip').disabled) return;
+  if ($('model-dialog').open) return; // Ctrl/⌘+K again while it is open: showModal() would throw
   try { client?.queryModel(); } catch { /* reported by the connection */ }
   $('model-search').value = ''; renderModelList(); $('model-dialog').showModal();
   (client?.pageKind === 'direct' && client.models?.length ? $('model-search') : $('model-close')).focus();
@@ -263,7 +282,7 @@ async function confirmModel(name) {
     if (sameModel(client.model, name)) return true;
     if (client.blocked) { i = 0; if (!$('notice-text').textContent.startsWith('ARENA_DIALOG_OPEN')) notice(`ARENA_DIALOG_OPEN: ${client.blocked}`); }
     try { client.queryModel(); } catch { return false; }
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => { setTimeout(r, 500); });
   }
   return sameModel(client?.model, name);
 }
@@ -452,6 +471,14 @@ async function recoverNow() {
     if (epoch !== version || state !== 'reconnecting') return;
     const text = error.message || '';
     if (/no tab with id/i.test(text)) { giveUp('The Arena tab was closed. Open Arena and connect again from Settings.', 'The Arena tab was closed before the reply arrived.'); return; }
+    // The page clears its side of a closed port asynchronously, so a reconnect that races the previous
+    // connection can be refused once. That is transient: retry a few times with backoff before ending
+    // the session and asking the user to reconnect by hand.
+    if (/TAB_IN_USE|Another extension panel/i.test(text) && recovery.attempt < 4) {
+      notice(`Reconnecting to the Arena tab… (attempt ${recovery.attempt}) the previous connection is still closing.`);
+      scheduleRecovery(Math.max(1000, RECOVERY_DELAYS[Math.min(recovery.attempt, RECOVERY_DELAYS.length - 1)]));
+      return;
+    }
     if (/no longer on Arena|TAB_IN_USE/i.test(text)) { giveUp(`${text} Open Settings to connect again.`); return; }
     notice(`Reconnecting to the Arena tab… (attempt ${recovery.attempt}) ${text}`.trim());
     scheduleRecovery();
@@ -462,7 +489,18 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 window.addEventListener('focus', nudgeRecovery);
 chrome.tabs.onUpdated.addListener((tabId, info) => { if (tab && tabId === tab.id && info.status === 'complete') nudgeRecovery(); });
 
+// An event that cannot be applied must never leave the panel frozen on stale state or - worse - kill the
+// port listener it arrived on: the failure is logged, reported, and the view is rebuilt from what the
+// panel knows.
 function receive(event) {
+  try { handleEvent(event); }
+  catch (error) {
+    console.error('Arena Auto Chat could not apply an event:', event?.type, error);
+    try { notice(`${event?.type || 'EVENT'}_FAILED: The panel could not update itself (${error?.message || error}). Reconnect in Settings if this keeps happening.`); } catch { /* the panel DOM is unusable */ }
+    try { render(); } catch { /* already reported above */ }
+  }
+}
+function handleEvent(event) {
   if (event.type === 'MODEL_INFO') { render(); if ($('model-dialog').open) renderModelList(); return; }
   if (event.type === 'BRIDGE_LOST') { connectionLost(event); render(); return; }
   if (event.type === 'WAITING') { notice(`${event.code}: ${event.message}`); render(); return; }
@@ -628,7 +666,11 @@ function stageFiles(list, origin) {
   if (room <= 0) { $('attachment-status').textContent = `Only ${ATTACHMENT_POLICY.maxFiles} files fit in one message.`; return true; }
   const { accepted, rejected } = validateAttachments(files.slice(0, room));
   for (const meta of accepted) {
-    const file = files.find(item => item.name === meta.name && item.size === meta.size && item.type === (meta.type || item.type)) || files[0];
+    // The validated metadata must be matched back to the exact File object it came from. Falling back to
+    // another entry (for example when the browser reported no MIME type) would silently stage and send a
+    // different file than the one the checks above approved.
+    const file = files.find(item => String(item.name || '').trim() === meta.name && item.size === meta.size && (item.type === meta.type || !item.type));
+    if (!file) { $('attachment-status').textContent = `“${formatName(meta.name)}” could not be matched to the file you chose and was not staged.`; continue; }
     staged.push({ ...meta, file });
     if (meta.type.startsWith('image/')) { const item = staged.at(-1); try { item.url = URL.createObjectURL(file); } catch { /* preview only */ } }
   }
@@ -779,6 +821,5 @@ chrome.tabs.onUpdated.addListener((id, change) => {
   }
 });
 // Minimizing, covering or switching tabs keeps the session; closing the panel/window ends it (the port closes with the page).
-window.addEventListener('pagehide', () => { closeDialog(false); clear(); });
 window.addEventListener('pagehide', () => { closeDialog(false); clear(); });
 refresh().catch(error => { state = 'error'; notice(error.message); render(); });

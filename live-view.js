@@ -116,10 +116,16 @@ export class LiveView {
       this.shownText = preview; this.shownRich = rich;
     }
     this.text.hidden = !preview;
+    // A caret marks text Arena is still writing. Only that one class changes, and only when its value
+    // really flips, so the streaming animation never fights the text replacements above.
+    const streaming = !!preview && !!live.generating && !!active;
+    if (this.streaming !== streaming) { this.streaming = streaming; this.text.classList.toggle('streaming', streaming); }
     const signature = JSON.stringify(live.tools || []);
     if (signature !== this.toolSignature) {
-      this.tools.replaceChildren(...(live.tools || []).map(tool => this.node('li', `tool-activity tool-${tool.status}`, `Used ${tool.tool}${tool.duration ? ' · ' + tool.duration : ''}${tool.status === 'error' ? ' · error reported' : tool.status === 'done' ? ' · completed' : ''}`)));
-      this.toolSignature = signature;
+      // Only genuinely new steps animate in; a status change (activity → done) is the same row.
+      const tools = live.tools || [], known = this.toolCount || 0;
+      this.tools.replaceChildren(...tools.map((tool, index) => this.node('li', `tool-activity tool-${tool.status}${index >= known ? ' tool-new' : ''}`, `Used ${tool.tool}${tool.duration ? ' · ' + tool.duration : ''}${tool.status === 'error' ? ' · error reported' : tool.status === 'done' ? ' · completed' : ''}`)));
+      this.toolSignature = signature; this.toolCount = tools.length;
     }
     this.tools.hidden = !live.tools?.length;
     // Only Arena's visible label is mirrored; its collapsed thought text is never opened or copied.

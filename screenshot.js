@@ -76,7 +76,21 @@ export const requestShotAccess = (api = chrome) => api.permissions.request({ ori
 export const removeShotAccess = (api = chrome) => api.permissions.remove({ origins: [...SHOT_ORIGINS] }).catch(() => false);
 
 // ---------- capture ----------
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms); });
+// Chrome throttles captureVisibleTab to about two calls per second, and a full-page capture needs up to
+// SHOT.maxParts of them. One quota rejection used to abort the whole run and throw away the slices
+// already taken, so a rate-limited call is retried a few times with a growing pause first.
+export const CAPTURE_RETRY_LIMIT = 4;
+export const RATE_LIMITED = /max_capture_visible_tab_calls_per_second|too many.{0,40}capture|capture.{0,40}(?:rate|quota)|rate limit/i;
+export async function captureSlice(api, windowId, { attempts = CAPTURE_RETRY_LIMIT, wait = sleep } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await api.tabs.captureVisibleTab(windowId, { format: 'png' }); }
+    catch (error) {
+      if (attempt >= attempts - 1 || !RATE_LIMITED.test(String(error?.message || error || ''))) throw error;
+      await wait(350 * (attempt + 1));
+    }
+  }
+}
 function withTimeout(promise, ms, code, message) {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(shotError(code, message)), ms); })])
@@ -114,7 +128,7 @@ function pageMetrics() {
 }
 function pageScroll(y) {
   (document.scrollingElement || document.documentElement).scrollTop = y; scrollTo(0, y);
-  return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(scrollY))));
+  return new Promise(resolve => { requestAnimationFrame(() => requestAnimationFrame(() => resolve(scrollY))); });
 }
 // After the first frame, fixed/sticky bars (headers, cookie banners) would repeat in every slice.
 function pageHideFixed() {
@@ -123,7 +137,7 @@ function pageHideFixed() {
     const position = getComputedStyle(el).position;
     if (position === 'fixed' || position === 'sticky') { el.style.setProperty('visibility', 'hidden', 'important'); count++; }
   }
-  return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(count))));
+  return new Promise(resolve => { requestAnimationFrame(() => requestAnimationFrame(() => resolve(count))); });
 }
 
 /**
@@ -158,7 +172,12 @@ export async function captureLink(href, { api = chrome, onProgress = () => {}, s
       if (i === 1) await run(api, tabId, pageHideFixed);
       const wait = Math.max(0, SHOT.stepMs - (Date.now() - lastShot));
       await sleep(i === 0 ? 150 : wait);
-      const dataUrl = await api.tabs.captureVisibleTab(windowId, { format: 'png' });
+      let dataUrl;
+      try { dataUrl = await captureSlice(api, windowId); }
+      catch (error) {
+        // The window is closed by the caller's finally block either way; nothing half-captured is kept.
+        throw shotError('CAPTURE_FAILED', `Chrome did not return a screenshot of part ${i + 1} of ${steps.length} (${String(error?.message || 'unknown error').slice(0, 160)}). Nothing was attached.`);
+      }
       lastShot = Date.now(); lastY = y;
       captures.push({ y, dataUrl });
     }
