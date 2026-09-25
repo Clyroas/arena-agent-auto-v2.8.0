@@ -20,7 +20,7 @@ const browser = {
 
 export default [
   {
-    files: ['*.js', 'test/**/*.mjs'],
+    files: ['*.js', 'dev/**/*.js', 'test/**/*.mjs'],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: { ...browser, chrome: 'readonly' } },
     rules: {
       'no-undef': 'error',

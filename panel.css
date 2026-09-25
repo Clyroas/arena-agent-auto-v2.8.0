@@ -627,3 +627,79 @@ dialog.model-dialog { width: 380px; max-width: calc(100% - 24px); text-align: le
 :is(.bubble, .live-text).rich .rich-code-head { display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; border-bottom: 1px solid var(--separator); }
 :is(.bubble, .live-text).rich .rich-code-head .rich-code-lang { padding: 4px 0; border: 0; }
 .live-text.rich { white-space: normal; }
+
+/* ---------- Motion (v2.8.x) -------------------------------------------------------------------
+   The panel already moves in a few places (rise, shimmer, glow-spin, the sheet spring, the notice
+   slide, the switch knob). This section extends that same vocabulary to the moments that used to be
+   instantaneous: a reply arriving, a clarification card appearing, a file being staged, a copy
+   succeeding, a dialog opening, the composer becoming sendable. Every rule here is driven by state
+   that only changes when something really happened (hidden toggles, data-state, aria-checked,
+   aria-current), so none of it replays on a re-render, and only transform/opacity are animated so
+   nothing triggers layout. The global prefers-reduced-motion rule above disables all of it. */
+@keyframes arrive { from { opacity: 0; transform: translateY(8px) scale(.985); } }
+@keyframes pop-in { 0% { opacity: 0; transform: scale(.5); } 60% { opacity: 1; transform: scale(1.12); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes check-pop { from { opacity: 0; transform: translateY(-50%) scale(.4); } 100% { opacity: 1; transform: translateY(-50%) scale(1); } }
+@keyframes chip-in { from { opacity: 0; transform: scale(.86); } }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(12px) scale(.96); } }
+@keyframes backdrop-in { from { opacity: 0; } }
+@keyframes caret-blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+@keyframes breathe { 50% { opacity: .45; } }
+
+.arrive, .chat-empty > *, .live-output, .pending-reply, .question-card,
+.pair-card:not([hidden]), .turn-outcome:not([hidden]), .assistant-message, .history-import {
+  animation: arrive .32s cubic-bezier(.2, .8, .2, 1) both;
+}
+/* The reply's own beat: the sparkle mark pops in with the text, slightly faster than the bubble. */
+.assistant-mark { animation: pop-in .42s cubic-bezier(.34, 1.3, .64, 1) both; }
+.pending-reply { animation-duration: .38s; }
+/* The empty state breathes in, one line after another. */
+.chat-empty > :nth-child(2) { animation-delay: .05s; }
+.chat-empty > :nth-child(3) { animation-delay: .1s; }
+.chat-empty > :nth-child(4) { animation-delay: .15s; }
+.chat-empty .empty-orb { animation: arrive .5s cubic-bezier(.2, .8, .2, 1) both, glow-spin 8s linear infinite .35s; }
+
+/* Staged files pop in; removing one keeps the rest still. */
+.attachment-chip { animation: chip-in .22s cubic-bezier(.3, .9, .4, 1.1) both; }
+.attachment-chip img { transition: transform .2s cubic-bezier(.2, .8, .2, 1); }
+.attachment-thumb:hover img { transform: scale(1.06); }
+.attachment-remove { transition: background-color .15s, transform .15s; }
+.attachment-remove:hover { background: var(--red); transform: scale(1.1); }
+
+/* Answering: the tick pops in, the chosen row eases into its highlight. */
+.question-option { transition: background-color .18s ease-out, box-shadow .18s ease-out; }
+.question-option[aria-checked="true"]::after { animation: check-pop .22s cubic-bezier(.34, 1.4, .64, 1); }
+.pair-option { transition: background-color .2s ease-out, box-shadow .2s ease-out; }
+.pair-option[data-chosen="true"] { animation: arrive .3s cubic-bezier(.2, .8, .2, 1); }
+
+/* Live activity only moves where it means something: a new tool step slides in, the thought label
+   breathes, and the streaming text carries a caret while Arena is still writing. */
+.tool-activity.tool-new { animation: arrive .26s cubic-bezier(.2, .8, .2, 1) both; }
+.live-thinking[data-state="active"]::before { animation: breathe 1.6s ease-in-out infinite; }
+.shot-chip[data-state="busy"] { animation: breathe 1.4s ease-in-out infinite; }
+.live-text.streaming::after {
+  content: ""; display: inline-block; width: 2px; height: 1.05em; margin-left: 3px; border-radius: 1px;
+  background: var(--accent); vertical-align: -.16em; animation: caret-blink 1.05s step-end infinite;
+}
+
+/* Copying: the word "Copied" lands with a pop instead of appearing. */
+.reply-copy[data-state="ok"], .rich-copy[data-state="ok"] { animation: pop-in .28s cubic-bezier(.34, 1.3, .64, 1); }
+.reply-copy, .rich-copy { transition: background-color .15s, color .15s; }
+
+/* Composer: the Send button pops the moment it becomes usable, and the microphone/attach icons ease. */
+.send-button { transition: opacity .2s ease-out, transform .15s; }
+.send-button:not(:disabled) { animation: pop-in .3s cubic-bezier(.34, 1.3, .64, 1); }
+.composer-icon svg, .toolbar-button svg { transition: transform .18s cubic-bezier(.2, .8, .2, 1); }
+.composer-icon:hover:not(:disabled) svg, .toolbar-button:hover:not(:disabled) svg { transform: scale(1.08); }
+.model-option { transition: background-color .15s ease-out, transform .15s cubic-bezier(.2, .8, .2, 1); }
+.model-option:hover, .model-option:focus-visible { transform: translateX(2px); }
+
+/* Connection state eases between colors instead of snapping. */
+.status-pill { transition: background-color .28s ease-out, color .28s ease-out; }
+.status-dot { transition: background-color .28s ease-out, box-shadow .28s ease-out; }
+
+/* Dialogs: a short rise with a fade of the backdrop behind them. */
+dialog[open] { animation: dialog-in .24s cubic-bezier(.2, .8, .2, 1) both; }
+dialog[open]::backdrop { animation: backdrop-in .24s ease-out both; }
+
+/* The settings sheet's rows could animate in as the sheet opens, but that would fight the sheet's own
+   spring; its children stay still so the panel feels like one object sliding up. */

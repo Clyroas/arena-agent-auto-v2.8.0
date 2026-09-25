@@ -23,7 +23,7 @@ makes an existing guard reachable.
 
 ## Added alongside the fixes
 
-- **`test/` (69 tests, `npm test`)** — the pure helpers (`core`, `attachment-policy`, `live-status`,
+- **`test/` (92 tests, `npm test`)** — the pure helpers (`core`, `attachment-policy`, `live-status`,
   `rich-view`, `screenshot`, `window-geometry`, `recent-models`), plus the paths that used to be
   untestable: the connection handover and scan coalescing in the content script (jsdom), the panel client’s
   hang/teardown paths (faked `chrome`), and a version-anchor check that fails if a future version bump
@@ -31,6 +31,45 @@ makes an existing guard reachable.
   runtime (`VERSION_MISMATCH` / `SCRIPT_REGISTRATION_FAILED`), so it is worth a test.
 - **`npm run lint` / `npm run check`, `package.json`, `.gitignore`, GitHub Actions CI** — the extension
   still has no build step and no runtime dependencies; these are dev-only.
+- **`test/conversation-view.test.mjs`** renders the real `panel.html` through `ConversationView`, so the
+  markup contract (which element each state toggle lives on) is checked instead of assumed — this is also
+  what the motion layer keys off.
+
+## Motion layer (added after the stability pass)
+
+The panel already moved in a few places (turn rise, notice slide, shimmer on the pending title, the sheet
+spring, the switch knob), so the additions extend that vocabulary instead of introducing a second one:
+short durations, `transform`/`opacity`/colour only, the same spring easing, and the same state-driven
+trigger discipline.
+
+| Moment | Motion |
+|--------|--------|
+| A reply arrives | the reply block is inserted (not toggled), so it rises and fades in, with the sparkle mark popping a beat faster |
+| Live text streaming | a blinking caret on the live preview, shown only while Arena is genuinely still writing |
+| A new tool step starts | only the new row slides in; a status change on an existing row stays still |
+| A clarification card appears | the card rises in; selecting an option pops its tick and eases the highlight |
+| A response pair appears | the card rises in, the chosen side eases into its accent ring |
+| Staged files | each chip pops in; the thumbnail grows on hover, the remove button reddens |
+| Copy reply / copy code | "Copied" pops in instead of appearing |
+| Send becomes usable | the Send button pops the moment it stops being disabled |
+| Connection state | the status pill and its dot ease between colours instead of snapping |
+| Dialogs | the sheet rises with a fade of the backdrop behind it |
+| Settings rows, model list | hover slides the row 2px and the icons scale slightly |
+
+Guard rails, all enforced by `test/stylesheet.test.mjs`:
+
+* **No layout properties are animated** — `ConversationView` measures the scroller and the composer to keep
+  the newest reply pinned, so animating size or position would fight that measurement.
+* **Every animation hangs off state that flips once per event** (a `hidden` toggle, `data-state`,
+  `aria-checked`, `aria-current`, or an element created for one event) — the panel re-renders on every
+  live update, and an animation keyed off a class the render loop rewrites would twitch continuously.
+* **`prefers-reduced-motion: reduce` disables all of it** through the pre-existing global override.
+* **Interface changes stay under 600 ms**; only deliberate ambient loops (the glow, the shimmer, the caret,
+  the breathing thought label, the notice ping) are allowed to run continuously.
+
+`dev/preview.html` renders the real panel against a fake Arena tab so the motion can be judged without a
+live chat: serve the repository over http and open it. It is not part of the extension and nothing in
+`manifest.json` references it (`python3 -m http.server 8080`, then `/dev/preview.html`).
 
 ## Findings left open (deliberately)
 
@@ -52,7 +91,9 @@ makes an existing guard reachable.
 
 ```bash
 npm install
-npm run check   # eslint + 69 tests
+npm run check   # eslint + 92 tests
+
+python3 -m http.server 8080   # then open /dev/preview.html to watch the motion
 ```
 
 The two behavioural fixes can also be re-checked against the pre-fix code by reverting the
