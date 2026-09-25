@@ -101,8 +101,8 @@ Extension pages declare `connect-src 'none'`: the extension itself makes no netw
 
 | Module | Exports / role |
 |--------|----------------|
-| `core.js` | `AGENT_URL`, `DIRECT_URL`, `isArena`/`isDirect`/`isDirectChat`, `directModelUrl`, `samePage`, `tabLabel`, `withTimeout` |
-| `agent-dom.js` | `globalThis.ArenaAgentDOM`: selectors, transcript reading, typing, clicking, coded `DomError`s |
+| `core.js` | `AGENT_URL`, `DIRECT_URL`, `isArena`/`isDirect`/`isDirectChat`, `directModelUrl`, `samePage`, `tabLabel`, `withTimeout`, `capabilitySummary` |
+| `agent-dom.js` | `globalThis.ArenaAgentDOM`: selectors, transcript reading, typing, clicking, coded `DomError`s, and `capabilities()` — a non-throwing semantic snapshot of which named controls the page currently exposes |
 | `agent-content.js` | Connection ownership, heartbeat lease, scan coalescing, registration guard |
 | `agent-client.js` | `AgentClient`: the panel's direct port, heartbeat, bounded worker calls |
 | `conversation-view.js` | Transcript rendering against the real `panel.html` markup contract |

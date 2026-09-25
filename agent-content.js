@@ -454,7 +454,12 @@
     // An Arena dialog over the message box (the message box itself is otherwise fine).
     let blocked = '';
     try { D.composer(); } catch (e) { if (e.code === 'ARENA_DIALOG_OPEN') blocked = e.message; }
-    return { pageKind, model: pageKind === 'direct' ? D.currentModel() : '', models, blocked };
+    return { pageKind, model: pageKind === 'direct' ? D.currentModel() : '', models, blocked, capabilities: capabilityInfo() };
+  }
+  // The named capabilities Arena currently exposes. Diagnostic only: a failure here must never stop an
+  // otherwise usable connection, so it collapses to null and the panel says "not reported".
+  function capabilityInfo() {
+    try { return D.capabilities?.() || null; } catch { return null; }
   }
   let probingPort = null;
   async function probe(port) {

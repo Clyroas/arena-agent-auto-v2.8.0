@@ -3,7 +3,7 @@ import { TabAwakeLease } from './tab-awake.js';
 import { setupFloatingGeometry } from './window-geometry.js';
 import { ConversationView } from './conversation-view.js';
 import { AgentClient } from './agent-client.js';
-import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl, withTimeout } from './core.js';
+import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl, withTimeout, capabilitySummary } from './core.js';
 import { liveStatus, questionState } from './live-status.js';
 import { recentModels, rememberModel } from './recent-models.js';
 import { findLinks, hostLabel, captureLink, hasShotAccess, requestShotAccess, removeShotAccess } from './screenshot.js';
@@ -134,6 +134,10 @@ $('notice-minimize').addEventListener('click', () => { clearTimeout(noticeTimer)
 $('notice-dot').addEventListener('click', () => { $('notice-dot').classList.remove('fresh'); setNoticeOpen(true); armNoticeTimer(); });
 $('notice').addEventListener('mouseleave', armNoticeTimer);
 function render() {
+  // Semantic capability / drift check for the connected tab (see core.js capabilitySummary). A page that
+  // no longer exposes a control the adapter drives blocks Send with a coded reason instead of failing
+  // later, mid-send. Missing upload support is not drift: text chat still works.
+  const drift = client?.ready ? capabilitySummary(client.capabilities) : null;
   $('status').textContent = labels[state]; $('status').dataset.state = state;
   document.body.dataset.working = String(!!pending && pending.status !== 'error');
   document.body.dataset.connected = String(!!client?.ready);
@@ -141,7 +145,7 @@ function render() {
   $('connect').disabled = busy || !!tab || !$('tabs').value || !$('confirmed').checked || !$('authorize').checked;
   $('tabs').disabled = busy || !!tab;
   $('confirmed').disabled = busy || !!tab; $('authorize').disabled = busy || !!tab;
-  $('prepare').disabled = busy || switching || !!shotOperation || !!requestedModel || !!client?.silent || state !== 'ready' || !client?.ready || !!pending;
+  $('prepare').disabled = busy || switching || !!shotOperation || !!requestedModel || !!drift?.drift || !!client?.silent || state !== 'ready' || !client?.ready || !!pending;
   // While reattaching, the draft stays editable; Send waits for the verified connection.
   $('prompt').disabled = pending ? true : busy || (state !== 'reconnecting' && (state !== 'ready' || !client?.ready));
   const uploadReady = client?.ready && client.uploadKind === 'input';
@@ -167,7 +171,8 @@ function render() {
   $('pending').dataset.question = String(questionState(pending?.live?.questions) === 'answerable' && pending?.status !== 'error');
   $('tab-name').textContent = tab ? tabLabel(tab) : '';
   $('tab-url').textContent = tab?.url || '';
-  $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.8.2 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
+  $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.8.2 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}${drift ? ` · ${drift.text}` : ''}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
+  $('adapter-state').dataset.drift = String(!!drift?.drift);
   $('progress').textContent = pending?.status === 'error' ? 'Capture stopped. Read the error above and check the Arena tab. No manual reply entry is available.' : pending?.phase === 'review' ? 'Closing the task-review panel and waiting for the composer. No feedback is selected.' : questionState(pending?.live?.questions) === 'answerable' ? 'Review the question cards above. Select an answer, then submit it explicitly. Sensitive or unsupported actions stay in Arena.' : pending?.status === 'waiting' ? 'Your message is in Arena. The status above follows its visible activity; the final reply appears separately — no response time limit. Approvals and unsupported controls stay in Arena.' : pending?.phase === 'upload' ? 'Placing your staged files into the Arena composer, then attempting exactly one Send click…' : 'Preparing the Arena composer and attempting exactly one Send click…';
   const found = client?.ready ? client.historyCount || 0 : 0, imported = turns.filter(t => t.imported).length;
   $('history-import').hidden = !client?.ready || (!found && !imported);
@@ -725,6 +730,8 @@ action('reconnect', async () => {
 action('prepare', async () => {
   if (shotOperation || requestedModel || switching) throw new Error('Finish or cancel the screenshot and confirm the selected model before sending.');
   if (state !== 'ready' || !client?.ready || pending || !tab) throw new Error('Connect and verify the Agent controls before sending.');
+  const capability = capabilitySummary(client.capabilities);
+  if (capability.drift) throw new Error(`The Arena page no longer matches this adapter (missing: ${capability.required.join(', ')}). Verify the Arena tab and update/reload the extension before sending. No prompt was sent.`);
   const text = $('prompt').value.trim();
   if (!text || text.length > 30000) throw new Error('Enter a message of 1–30,000 characters with any attachments.');
   if (staged.length && !client?.ready) throw new Error('Connect and verify the Arena tab before sending staged files.');

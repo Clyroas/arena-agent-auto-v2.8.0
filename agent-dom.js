@@ -598,6 +598,32 @@
     const field = composer(doc), button = sendButton(doc, field);
     return { field, button, inputKind: field.tagName === 'TEXTAREA' ? 'textarea' : 'contenteditable', uploadKind: uploadsFor(field, doc).kind, fileInputCount: fileInputsFor(field, doc).length };
   }
+  // Semantic capability snapshot: which named Arena capabilities this page currently exposes, using the
+  // same primitives the adapter drives. A control that Arena renames or removes then shows up as a named
+  // gap ("unsupported page layout") instead of only surfacing later as a generic error. Pure and
+  // non-throwing — a diagnostic must never be able to break an otherwise usable connection.
+  function capabilities(doc = document) {
+    const safe = fn => { try { return fn(); } catch { return null; } };
+    const field = safe(() => composer(doc));
+    const upload = safe(() => (field ? uploadsFor(field, doc) : { kind: 'none' }));
+    const visibleAny = selector => [...doc.querySelectorAll(selector)].some(visible);
+    return {
+      pageKind: pageKind(doc),
+      mode: safe(() => modeLabel(doc)) || '',
+      checks: {
+        composer: !!field,
+        send: field ? safe(() => !!sendButton(doc, field)) === true : false,
+        transcript: pageKind(doc) === 'direct'
+          ? safe(() => { directRows(doc); return directEls.size > 0; }) === true
+          : agentRowsPresent(doc),
+        questions: visibleAny('[role="radiogroup"][aria-label]'),
+        responsePairs: visibleAny('[aria-roledescription="carousel"]') || visibleAny('.sticky span.font-mono > span.truncate'),
+        reviewPanel: visibleAny('button[aria-label="Close review panel"]'),
+        upload: upload?.kind === 'input',
+        uploadPicker: upload?.kind === 'button-only'
+      }
+    };
+  }
   function preflight(doc = document) {
     const list = conversationReady(doc);
     if (reviewPanel(doc)) fail('REVIEW_PANEL_VISIBLE', 'The task-review panel still covers the composer. Close it in Arena before continuing. No feedback option was selected and no Send click was attempted.');
@@ -984,5 +1010,5 @@
 
   globalThis.ArenaAgentDOM = { version: '2.8.2', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
     richOf, userRowText, userRowMatches, composer, sendButton, enabled, reviewPanel, conversationReady, inspectControls, preflight, matchTurn, questionsFor, toolActivity, thinkingStatus, historyTurns, historyCount, answerText, normalize, composerText, writeComposer, composerSummary, fileInputsFor, composerFileInputs, uploadsFor, stageRequestFor, nearComposer, promptMatches,
-    pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide };
+    pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide, capabilities };
 })();
