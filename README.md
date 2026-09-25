@@ -6,9 +6,9 @@ and captures the matching reply from the transcript. There is no manual fallback
 API client: if the page can't be driven reliably, the extension fails closed with an explanation
 instead of guessing.
 
-Version 2.8.2 · no build step · no runtime dependencies.
+Version 2.8.3 · no build step · no runtime dependencies.
 
-See [CHANGELOG.md](CHANGELOG.md) for 2.8.2 and [implementation status](docs/IMPLEMENTATION-STATUS.md) for completed work, verification limits, and remaining improvements. Reload both the extension and your Arena tabs after updating.
+See [CHANGELOG.md](CHANGELOG.md) for 2.8.3 and [implementation status](docs/IMPLEMENTATION-STATUS.md) for completed work, verification limits, and remaining improvements. Reload both the extension and your Arena tabs after updating.
 
 ## What it does
 
@@ -112,7 +112,7 @@ the conventions CI enforces.
 ```bash
 npx playwright install --with-deps chromium
 npm run test:browser       # synthetic fixtures; no Arena credentials or live network requests
-npm run package:extension  # load dist/arena-auto-chat-2.8.2 unpacked, or use the repository directly
+npm run package:extension  # load dist/arena-auto-chat-2.8.3 unpacked, or use the repository directly
 ```
 
 Browser tests require a working Chromium installation. The initial implementation sandbox could not download/start that browser, so do not confuse the passing Node suite with verified live-site compatibility. CI installs Chromium separately. Packaging uses `extension-files.json` and excludes dependencies, tests, dev preview, and repository metadata.

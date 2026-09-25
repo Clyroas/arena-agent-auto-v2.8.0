@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.8.3 — 2026-09-25
+
+Resume fix for the security-verification pause added in 2.8.2. Reload the extension **and Arena tabs** after updating.
+
+### Fixed
+
+- Passing a captcha / "verify you are human" check no longer stops tracking. Clearing the interstitial usually re-mounts Arena's transcript, so the first scan afterwards saw an empty row list and raised `CONVERSATION_CHANGED` ("…0 row(s) on page") — ending the turn exactly when the user had just cleared the check. A bounded settle window now re-anchors on the accepted message ID and continues on its own, with no manual reconnect.
+- A transcript remount that outlasts the window, or a page where the accepted message ID is gone, still stops rather than capturing blind.
+
 ## 2.8.2 — 2026-09-25
 
 Correctness and recovery work from the improvement review. Reload the extension **and Arena tabs** after updating; older adapters are rejected rather than mixing staging protocols.

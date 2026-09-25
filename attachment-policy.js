@@ -3,7 +3,7 @@
 // Dual format: an ESM module for the extension pages and a window global for the classic content script.
 (() => {
   'use strict';
-  const VERSION = '2.8.2';
+  const VERSION = '2.8.3';
   if (globalThis.ArenaAgentAttachments?.version === VERSION) return;
   const ATTACHMENT_POLICY = Object.freeze({
     maxFiles: 4, maxBytes: 8 * 1024 * 1024,

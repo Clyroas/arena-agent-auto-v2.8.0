@@ -79,3 +79,22 @@ test('securityNotice does not read the transcript', () => {
     assert.equal(D.securityNotice(), '', 'chat text that merely mentions verification is not a block');
   } finally { close(); }
 });
+
+test('reanchor rebuilds the baseline from the accepted message ID, and refuses without it', () => {
+  const html = '<div data-agent-transcript-message="true" data-chat-message-id="u1"><div data-user-message-layout="true"><div class="prose">hello world</div></div></div>'
+    + '<div data-agent-transcript-message="true" data-chat-message-id="a1"><div class="prose">Done.</div><div aria-label="Response ended"></div></div>';
+  const { D, close } = openDom(html);
+  try {
+    // The tracked message is still on the page after a remount: rebuild the baseline before it and let
+    // matchTurn re-verify the row and the prompt as usual.
+    const tx = { baseline: [], prompt: 'hello world', userId: 'u1' };
+    assert.equal(D.reanchor(tx), true);
+    assert.equal(tx.baseline.length, 0);
+    assert.equal(D.matchTurn(tx).accepted, true);
+    // No accepted ID yet, or one that is no longer present: refuse, so a real conversation change stops.
+    assert.equal(D.reanchor({ baseline: [], prompt: 'hello world' }), false);
+    assert.equal(D.reanchor({ baseline: [], prompt: 'hello world', userId: 'gone' }), false);
+    // An ID that now belongs to an assistant row is not the user's message.
+    assert.equal(D.reanchor({ baseline: [], prompt: 'hello world', userId: 'a1' }), false);
+  } finally { close(); }
+});

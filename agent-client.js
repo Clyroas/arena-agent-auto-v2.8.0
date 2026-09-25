@@ -4,7 +4,7 @@
 // idle worker can no longer drop the chat connection.
 import { withTimeout } from './core.js';
 
-export const ADAPTER_VERSION = '2.8.2';
+export const ADAPTER_VERSION = '2.8.3';
 export const HEARTBEAT_MS = 10000;
 // Worker requests made while a Send is being prepared must not wait forever: the panel would otherwise
 // stay in “Sending…” with the staged bytes held in memory. Both are bounded well below the point where a

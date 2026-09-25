@@ -37,7 +37,7 @@ function open() {
   const counters = { matchTurn: 0, checkBlocks: 0 };
   class DomError extends Error { constructor(code, message) { super(message); this.code = code; } }
   window.ArenaAgentDOM = {
-    version: '2.8.2', counters, DomError,
+    version: '2.8.3', counters, DomError,
     samePage: () => true,
     checkBlocks: () => { counters.checkBlocks++; },
     securityNotice: () => '',
@@ -47,7 +47,8 @@ function open() {
     inspectControls: () => ({ inputKind: 'textarea', reviewPending: false, uploadKind: 'none', fileInputCount: 0 }),
     capabilities: () => ({ pageKind: 'agent', mode: '', checks: { composer: true, send: true, transcript: true, questions: false, responsePairs: false, reviewPanel: false, upload: false, uploadPicker: false } }),
     pageKind: () => 'agent', currentModel: () => '', modelCatalog: () => [],
-    historyCount: () => 0
+    historyCount: () => 0,
+    reanchor: () => false
   };
   window.ArenaAgentAttachments = { ATTACHMENT_POLICY: { maxFiles: 4, maxBytes: 8 * 1024 * 1024 } };
   window.eval(source);
@@ -64,7 +65,7 @@ test('the content script registers once and reports its version to the panel', (
   const page = open();
   try {
     assert.equal(page.connectListeners.length, 1);
-    assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.version, '2.8.2');
+    assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.version, '2.8.3');
     assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.isAlive(), true);
     page.window.eval(source); // a second injection of the same version must not stack listeners
     assert.equal(page.connectListeners.length, 1);
@@ -220,6 +221,45 @@ test('a security pause does not spend the message-acceptance budget', async () =
     seen.push(...port.posted.filter(event => event.type === 'SECURITY_CLEARED'));
     assert.equal(seen.length, 1);
     assert.equal(port.posted.some(event => event.type === 'ERROR'), false, 'no SEND_NOT_CONFIRMED after a pause on a resumed turn');
+  } finally { page.close(); }
+});
+
+test('a transcript remount right after a security verification resumes instead of stopping', async () => {
+  const page = open();
+  try {
+    let notice = 'Arena is showing a security verification.';
+    page.window.ArenaAgentDOM.securityNotice = () => notice;
+    let failNext = false, reanchors = 0;
+    page.window.ArenaAgentDOM.matchTurn = () => {
+      page.counters.matchTurn++;
+      // The verification clears while Arena re-mounts: the first read sees an empty transcript, and the
+      // second read (after re-anchoring on the accepted message ID) sees it whole again.
+      if (failNext) { failNext = false; throw new page.window.ArenaAgentDOM.DomError('CONVERSATION_CHANGED', 'The Agent transcript changed or was virtualized. Capture stopped to avoid an unrelated reply. Inspect the Arena tab. [Seen: nothing; 0 row(s) on page]'); }
+      return { accepted: true, userId: 'user-1' };
+    };
+    page.window.ArenaAgentDOM.reanchor = () => { reanchors++; return true; };
+    const port = page.connect(makePort());
+    port.emit({ type: 'WATCH', requestId: '77777777-7777-7777-7777-777777777777', prompt: 'hello', userMessageId: 'user-1', url: 'https://arena.ai/agent/c/1' });
+    notice = ''; failNext = true;
+    port.emit({ type: 'PING' });
+    assert.equal(port.posted.some(event => event.type === 'ERROR'), false, 'a post-verification remount must not stop capture');
+    assert.equal(reanchors, 1, 'the accepted message ID is used to re-anchor exactly once');
+    // The retry result must actually be used: the scan has to continue past the recovered read rather than
+    // discarding it and throwing the original error.
+    const afterRecovery = page.counters.matchTurn;
+    assert.equal(afterRecovery, 2, 'one failed read, then exactly one re-anchored retry that is used');
+  } finally { page.close(); }
+});
+
+test('a genuine transcript change is still a hard stop', async () => {
+  const page = open();
+  try {
+    page.window.ArenaAgentDOM.matchTurn = () => { throw new page.window.ArenaAgentDOM.DomError('CONVERSATION_CHANGED', 'The Agent transcript changed or was virtualized.'); };
+    page.window.ArenaAgentDOM.reanchor = () => false;
+    const port = page.connect(makePort());
+    port.emit({ type: 'WATCH', requestId: '88888888-8888-8888-8888-888888888888', prompt: 'hello', userMessageId: 'user-1', url: 'https://arena.ai/agent/c/1' });
+    const stopped = port.posted.find(event => event.type === 'ERROR');
+    assert.equal(stopped?.code, 'CONVERSATION_CHANGED', 'outside a verification settle window the guard must still stop capture');
   } finally { page.close(); }
 });
 
