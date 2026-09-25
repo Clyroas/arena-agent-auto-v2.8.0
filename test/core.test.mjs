@@ -91,6 +91,14 @@ test('capabilitySummary names what Arena stopped exposing', () => {
   assert.match(summary.text, /\(Agent\)/);
 });
 
+test('capabilitySummary treats a fresh, empty transcript as normal, not drift', () => {
+  // A brand-new Agent conversation has no message rows yet; requiring one would block the first send.
+  const summary = capabilitySummary({ pageKind: 'agent', mode: '', checks: { ...allChecks, transcript: false } });
+  assert.equal(summary.drift, false);
+  assert.deepEqual(summary.required, []);
+  assert.deepEqual(summary.missing, ['transcript rows']);
+});
+
 test('capabilitySummary treats missing upload support as degraded, not drift', () => {
   const summary = capabilitySummary({ pageKind: 'agent', mode: '', checks: { ...allChecks, upload: false, uploadPicker: false } });
   assert.equal(summary.drift, false);

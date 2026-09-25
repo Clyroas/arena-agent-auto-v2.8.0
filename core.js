@@ -33,15 +33,16 @@ export function tabLabel(tab) {
 // Human-readable summary of the semantic capability snapshot the page adapter reports (see
 // agent-dom.js capabilities()). Pure so the panel and the tests share one wording and one classification.
 // `drift` is true only when a snapshot was actually reported AND it is missing a capability the adapter
-// cannot work without — the signal that Arena's markup moved. Clarification cards, response pairs, the
-// review panel and upload are all transient or optional for a text send, so their absence is reported but
-// never blocks. An absent snapshot (a diagnostic that could not run) is reported but never blocks either:
-// the version check already guards adapter identity, and a missing diagnostic must not turn a working
-// connection into a refused send. Kept deliberately small: no chat content, URLs or identifiers enter it.
+// cannot send without — the signal that Arena's markup moved. Only the composer and its Send control
+// qualify: a fresh conversation legitimately has no transcript rows yet, and clarification cards, response
+// pairs, the review panel and upload are all transient or optional for a text send. An absent snapshot (a
+// diagnostic that could not run) is reported but never blocks either: the version check already guards
+// adapter identity, and a missing diagnostic must not turn a working connection into a refused send. Kept
+// deliberately small: no chat content, URLs or identifiers enter it.
 const CAPABILITY_LABELS = [
   ['composer', 'message box', true],
   ['send', 'Send control', true],
-  ['transcript', 'transcript markers', true],
+  ['transcript', 'transcript rows', false],
   ['questions', 'clarification cards', false],
   ['responsePairs', 'response pairs', false],
   ['reviewPanel', 'task-review panel', false],
