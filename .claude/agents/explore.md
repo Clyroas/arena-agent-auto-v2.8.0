@@ -23,19 +23,27 @@ editing tools - attempting to edit files will fail.
 
 ## Repository map — search here first
 
+Layer membership is decided by **who imports the module**, not by what it sounds like. Verified
+against the import graph at 2.8.2 — check `grep -n "^import" <file>` before assuming.
+
 | Layer | Files |
 |-------|-------|
-| Extension pages (UI, owns the chat connection) | `panel.html`, `panel.js`, `panel.css`, `floating.html`, `floating-window.js`, `conversation-view.js`, `live-view.js`, `live-status.js`, `rich-view.js`, `copy.js`, `theme.js`, `customization.js`, `recent-models.js`, `window-geometry.js`, `agent-client.js` |
-| MV3 service worker (one-shot requests only) | `worker.js`, `core.js`, `attachment.js`, `attachment-state.js`, `stage-main.js`, `screenshot.js`, `tab-awake.js` |
+| Extension pages (UI, owns the chat connection) | `panel.html`, `panel.js`, `panel.css`, `floating.html`, `agent-client.js`, `conversation-view.js`, `live-view.js`, `live-status.js`, `rich-view.js`, `copy.js`, `theme.js`, `customization.js`, `recent-models.js`, `window-geometry.js`, and three panel-only modules that sound worker-ish but are not: `attachment-state.js`, `tab-awake.js`, `screenshot.js` |
+| MV3 service worker (one-shot requests only) | `worker.js` and its four imports: `floating-window.js`, `attachment.js`, `stage-main.js`, `core.js` |
 | Content script (isolated world; owns the Arena page) | `agent-content.js`, `agent-dom.js`, `attachment-policy.js` |
+| Shared across contexts | `core.js` (panel, worker, `agent-client.js`, `attachment.js`), `attachment-policy.js` (content script **and** imported by `panel.js` so both sides apply the same rules) |
 | Manifest / packaging | `manifest.json`, `extension-files.json`, `scripts/package-extension.mjs` |
-| Tests | `test/*.test.mjs`, `test/browser/` |
+| Tests | `test/*.test.mjs`, `test/browser/`, `playwright.config.js`, `eslint.config.mjs` |
 | Docs | `README.md`, `CHANGELOG.md`, `STABILITY-REVIEW.md`, `docs/` |
-| Dev harness (fake Chrome + fake port) | `dev/preview.html`, `dev/preview.js` |
+| Dev harness (fake Chrome + fake port) | `dev/preview.html`, `dev/preview.js`, `index.html` (dev index) |
+
+Two traps this table exists to prevent: `floating-window.js` is **worker** code (it is
+`worker.js:1`), not a panel module; and `stage-main.js` is worker code that is *serialized into the
+page's main world*, so it belongs to neither context at runtime.
 
 Useful anchors (verified against the source, 2.8.2):
 
-- **Port name** — `arena-agent-content-v3` (`agent-client.js:50`, checked in `agent-content.js:498`).
+- **Port name** — `arena-agent-content-v3` (`agent-client.js:51`, checked in `agent-content.js:498`).
 - **Panel → content script** (the only 9 accepted, `agent-content.js:518-527`): `PING`, `WATCH`,
   `MODEL`, `PROBE`, `SEND`, `ANSWER_QUESTION`, `CHOOSE_RESPONSE`, `LOAD_HISTORY`, `CANCEL`.
   Anything else is silently ignored.
