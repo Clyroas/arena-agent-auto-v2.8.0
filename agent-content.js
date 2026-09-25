@@ -264,11 +264,61 @@
     emit({ type: 'CHOICE_SEEN', requestId: tx.requestId, side });
     queueScan();
   }
+  // A security verification (captcha / "verify you are human" interstitial) is transient: the user
+  // clears it in the Arena tab and the page returns to normal. Treating it as a fatal block stopped
+  // capture for good and made the panel look broken after the human had already passed it. Instead the
+  // loop holds the in-flight turn, tells the panel once, and resumes by itself on the next scan after the
+  // notice disappears. Only this notice is held; rate limits, sign-in walls and Arena errors stay fatal
+  // (see checkBlocks below). Returns true when the caller must stop this scan.
+  function holdForSecurity(tx) {
+    const notice = D.securityNotice?.() || '';
+    if (notice) {
+      if (!tx.securityHold) {
+        tx.securityHold = true; tx.securityHoldSince = Date.now();
+        emit({ type: 'BLOCKED', requestId: tx.requestId, code: 'SECURITY_CHECK', message: notice, clicked: !!tx.clicked, accepted: !!tx.userId });
+      }
+      return true;
+    }
+    if (tx.securityHold) {
+      tx.securityHold = false;
+      // A pause must not spend the "did Arena take the message?" budget: shift the deadline by however
+      // long the verification was up, so resuming does not immediately report SEND_NOT_CONFIRMED. The
+      // resume path uses Infinity as "no deadline", which must stay Infinity.
+      if (typeof tx.ackDeadline === 'number' && Number.isFinite(tx.ackDeadline)) tx.ackDeadline += Date.now() - (tx.securityHoldSince || Date.now());
+      tx.securityHoldSince = 0;
+      emit({ type: 'SECURITY_CLEARED', requestId: tx.requestId, clicked: !!tx.clicked, accepted: !!tx.userId });
+    }
+    return false;
+  }
+  // Bounded wait for the user to clear a verification before a Send. Unlike the tracking loop scan(),
+  // this cannot poll forever: the panel is already in "Sending…" holding the user's staged bytes, so after
+  // the deadline the request is stopped with an explicit code rather than left hanging. Sending into a
+  // page that is still showing a challenge would be unsafe, so it is refused, never retried.
+  const SECURITY_WAIT_MS = 120000;
+  async function waitOutSecurity(tx) {
+    if (!(D.securityNotice?.() || '')) return;
+    const deadline = Date.now() + SECURITY_WAIT_MS;
+    while (transaction === tx && owner && (D.securityNotice?.() || '')) {
+      if (!tx.securityHold) {
+        tx.securityHold = true;
+        emit({ type: 'BLOCKED', requestId: tx.requestId, code: 'SECURITY_CHECK', message: 'Arena is showing a security verification.', clicked: !!tx.clicked, accepted: !!tx.userId });
+      }
+      if (Date.now() >= deadline)
+        D.fail('SECURITY_CHECK', 'A security verification is still showing after two minutes. Complete it in the Arena tab, then send again. No Send click was attempted.');
+      await sleep(300);
+    }
+    if (tx.securityHold) {
+      tx.securityHold = false;
+      emit({ type: 'SECURITY_CLEARED', requestId: tx.requestId, clicked: !!tx.clicked, accepted: !!tx.userId });
+    }
+  }
   function scan() {
     const tx = transaction;
     if (!owner || !tx || !tx.clicked) return;
     lastScanAt = Date.now();
     try {
+      // Hold before checkBlocks so a transient verification never reaches the fatal path below.
+      if (holdForSecurity(tx)) return;
       D.checkBlocks();
       let result;
       try { result = D.matchTurn(tx); tx.unclearSince = 0; }
@@ -399,6 +449,8 @@
     transaction = tx;
     try {
       if (!D.samePage(message.url, location.href)) D.fail('CONVERSATION_CHANGED', 'The tab URL changed. Reconnect before sending.');
+      await waitOutSecurity(tx);
+      if (transaction !== tx || !owner) return;
       const prepared = await prepareComposer(tx);
       if (!prepared || transaction !== tx || !owner) return;
       D.checkBlocks();
@@ -479,7 +531,17 @@
             if (waiting !== e.message) { waiting = e.message; emit({ type: 'WAITING', code: e.code, message: e.message }); }
             deadline = Date.now() + 12000; await sleep(400); continue;
           }
-          // Only wait for missing/mounting UI. Never retry a Send or a security failure.
+          // A verification interstitial hides the composer behind a transient notice. Wait for the user to
+          // clear it (with the long dialog budget) instead of failing the handshake: once it passes, the
+          // same loop reaches READY and the panel learns the site verified. Only wait for this and for
+          // missing/mounting UI. Never retry a Send or a rate-limit/sign-in failure.
+          if (e.code === 'SECURITY_CHECK') {
+            if (waiting !== 'SECURITY_CHECK') {
+              waiting = 'SECURITY_CHECK';
+              emit({ type: 'WAITING', code: 'SECURITY_CHECK', message: 'Arena is showing a security verification. Complete it in the Arena tab; the panel will connect on its own once it passes.' });
+            }
+            deadline = Date.now() + 12000; await sleep(400); continue;
+          }
           if (!['COMPOSER_NOT_FOUND', 'SEND_BUTTON_NOT_FOUND'].includes(e.code) || Date.now() >= deadline) { error(e, null); return; }
           await sleep(200);
         }

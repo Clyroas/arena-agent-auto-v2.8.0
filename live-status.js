@@ -49,6 +49,9 @@ export function liveStatus(turn, now = Date.now()) {
   const result = (step, detail, kind) => ({ step, detail, kind, meta });
 
   if (turn.status === 'error') return result('Capture stopped', 'Read the error above and check the Arena tab.', 'error');
+  // A security verification can appear at any point. It pauses tracking rather than ending it, so it is
+  // reported distinctly from both "stopped" and "reconnecting".
+  if (turn.securityHold) return result('Waiting for verification', 'Arena is showing a security verification. Complete it in the Arena tab — tracking resumes on its own once it passes, and nothing is resent.', 'blocked');
   if (turn.phase === 'reconnecting') return result('Reconnecting to Arena', 'The connection dropped. Reattaching to the same tab to keep tracking this reply — nothing is resent.', 'reconnecting');
   if (turn.status === 'sending') {
     if (turn.phase === 'upload') return result('Uploading your files', 'Placing the staged files into Arena’s composer before the one Send click.', 'sending');

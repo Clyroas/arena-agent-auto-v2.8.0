@@ -209,6 +209,29 @@
     }
     return !!el.getClientRects().length;
   }
+  // A security verification is transient: the user clears it in the Arena tab and the page returns to
+  // normal. It therefore has to be *observable* separately from the hard blocks in checkBlocks(), so the
+  // capture loop can pause and resume instead of stopping the turn. Non-throwing by construction.
+  const SECURITY_TEXT = /captcha|verify (?:that )?you(?: are|'re) human|verification required|security (?:check|verification)|unusual traffic|checking your browser/i;
+  const SECURITY_FRAME = /recaptcha.*\/bframe|hcaptcha.*challenge|challenges\.cloudflare\.com/i;
+  const isSecurityText = text => SECURITY_TEXT.test(text);
+  function isSecurityFrame(frame) {
+    const src = frame.getAttribute('src') || '', rect = frame.getBoundingClientRect();
+    return SECURITY_FRAME.test(src) && rect.width > 100 && rect.height > 70;
+  }
+  // Returns a short description while a verification is visible, otherwise ''. Never throws, so callers
+  // can poll it safely while tracking a message.
+  function securityNotice(doc = document) {
+    for (const el of doc.querySelectorAll('[role="alert"],[role="dialog"],[data-sonner-toast],h1,h2')) {
+      if (!visible(el) || inTranscript(el)) continue;
+      if (isSecurityText(normalize(el.innerText || el.textContent).slice(0, 3000)))
+        return 'Arena is showing a security verification.';
+    }
+    for (const frame of doc.querySelectorAll('iframe')) {
+      if (visible(frame) && isSecurityFrame(frame)) return 'Arena is showing a security verification.';
+    }
+    return '';
+  }
   // Check UI notices, not chat text. Never copy these notices into a reply.
   function checkBlocks(doc = document) {
     refreshRows(doc);
@@ -216,7 +239,7 @@
       .filter(el => visible(el) && !inTranscript(el));
     for (const el of ui) {
       const text = normalize(el.innerText || el.textContent).slice(0, 3000);
-      if (/captcha|verify (?:that )?you(?: are|'re) human|verification required|security (?:check|verification)|unusual traffic|checking your browser/i.test(text))
+      if (isSecurityText(text))
         fail('SECURITY_CHECK', 'Complete the security verification in the Arena tab yourself. No retry or bypass was attempted. Check whether Arena accepted your prompt before sending again.');
       if (/rate limit|too many requests|quota exceeded|usage limit|try again (?:in|later)|limit reached/i.test(text))
         fail('RATE_LIMIT', 'Arena is limiting requests. Follow the wait time in the Arena tab. No automatic retry was attempted.');
@@ -227,8 +250,7 @@
     }
     for (const frame of doc.querySelectorAll('iframe')) {
       if (!visible(frame)) continue;
-      const src = frame.getAttribute('src') || '', rect = frame.getBoundingClientRect();
-      if ((/recaptcha.*\/bframe|hcaptcha.*challenge|challenges\.cloudflare\.com/i.test(src)) && rect.width > 100 && rect.height > 70)
+      if (isSecurityFrame(frame))
         fail('SECURITY_CHECK', 'A security verification is visible in the Arena tab. Complete it yourself there. No retry or bypass was attempted.');
     }
   }
@@ -1010,5 +1032,5 @@
 
   globalThis.ArenaAgentDOM = { version: '2.8.2', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
     richOf, userRowText, userRowMatches, composer, sendButton, enabled, reviewPanel, conversationReady, inspectControls, preflight, matchTurn, questionsFor, toolActivity, thinkingStatus, historyTurns, historyCount, answerText, normalize, composerText, writeComposer, composerSummary, fileInputsFor, composerFileInputs, uploadsFor, stageRequestFor, nearComposer, promptMatches,
-    pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide, capabilities };
+    pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide, capabilities, securityNotice };
 })();
