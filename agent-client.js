@@ -2,12 +2,22 @@
 // content script (chrome.tabs.connect from this extension page). The MV3 service worker is only
 // used for short one-shot requests (attach/inject, staged-file grants), so Chrome suspending the
 // idle worker can no longer drop the chat connection.
+import { withTimeout } from './core.js';
+
 export const ADAPTER_VERSION = '2.8.0';
 export const HEARTBEAT_MS = 10000;
+// Worker requests made while a Send is being prepared must not wait forever: the panel would otherwise
+// stay in “Sending…” with the staged bytes held in memory. Both are bounded well below the point where a
+// user would retry by hand.
+export const ATTACH_TIMEOUT_MS = 20000;
+export const GRANT_TIMEOUT_MS = 10000;
 
 export class AgentClient {
-  constructor(tabId, onEvent, expectedUrl) {
+  // `timeouts` exists so tests can exercise the failed-worker paths without waiting out the real ones;
+  // the panel always uses the defaults.
+  constructor(tabId, onEvent, expectedUrl, timeouts = {}) {
     this.closed = false; this.ready = false; this.onEvent = onEvent; this.tabId = tabId; this.port = null;
+    this.timeouts = { attach: timeouts.attach ?? ATTACH_TIMEOUT_MS, grant: timeouts.grant ?? GRANT_TIMEOUT_MS };
     this.readiness = new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
     this.readiness.catch(() => {}); // callers await it; avoid unhandled rejections after close
     this.timeout = setTimeout(() => this.fail('ADAPTER_HANDSHAKE_TIMEOUT: The Agent adapter did not finish connecting within 15 seconds. Check the Arena tab and this extension’s Site access in chrome://extensions. No prompt was sent.'), 15000);
@@ -16,7 +26,8 @@ export class AgentClient {
   async start(expectedUrl) {
     let attached;
     try {
-      const result = await chrome.runtime.sendMessage({ type: 'ATTACH', tabId: this.tabId, expectedUrl });
+      const result = await withTimeout(chrome.runtime.sendMessage({ type: 'ATTACH', tabId: this.tabId, expectedUrl }), this.timeouts.attach,
+        `The extension worker did not answer the connection request within ${Math.round(this.timeouts.attach / 1000)} seconds. It may have been restarted or updated; reload the Arena tab and reconnect. No prompt was sent.`);
       if (!result?.ok) throw Object.assign(new Error(result?.error || 'The extension worker did not respond. Reload the extension and the Arena tab.'), { code: result?.code || 'CONNECTION_FAILED' });
       attached = result.value;
     } catch (error) {
@@ -77,8 +88,16 @@ export class AgentClient {
   async send(requestId, prompt, url, attachments) {
     if (this.closed || !this.ready) throw new Error('The Agent adapter is not connected. Reconnect to Arena.');
     if (attachments?.length) {
-      // Single-use, 20-second permission for the page-context file insertion of this one Send.
-      const grant = await chrome.runtime.sendMessage({ type: 'STAGE_GRANT', tabId: this.tabId, documentId: this.documentId });
+      // Single-use, 20-second permission for the page-context file insertion of this one Send. Bounded,
+      // so a restarting worker cannot leave the panel stuck with the bytes still staged.
+      let grant;
+      try {
+        grant = await withTimeout(chrome.runtime.sendMessage({ type: 'STAGE_GRANT', tabId: this.tabId, documentId: this.documentId }), this.timeouts.grant,
+          `The extension worker did not confirm the staged files within ${Math.round(this.timeouts.grant / 1000)} seconds. Reload the Arena tab and try again. Nothing was sent.`);
+      } catch (error) {
+        if (error?.name === 'TimeoutError') throw error;
+        throw new Error(`The extension worker could not confirm the staged files (${error?.message || 'no response'}). Reload this panel and the Arena tab, then try again. Nothing was sent.`);
+      }
       if (!grant?.ok) throw new Error(grant?.error || 'The staged files could not be prepared. Nothing was sent.');
       if (this.closed || !this.ready) throw new Error('The Arena connection closed before sending. Nothing was sent.');
     }
@@ -104,7 +123,15 @@ export class AgentClient {
   cancel(requestId) {
     if (this.closed) return;
     try { this.port?.postMessage({ type: 'CANCEL', requestId }); } catch { /* already closed */ }
-    if (this.documentId) chrome.runtime.sendMessage({ type: 'STAGE_REVOKE', tabId: this.tabId, documentId: this.documentId }).catch(() => {});
+    this.revokeStage();
+  }
+  // Best effort and never throws: this runs from teardown paths (cancel, close, connection lost), where a
+  // synchronous “Extension context invalidated” error from sendMessage would break the caller instead of
+  // just skipping a stale grant the worker drops on its own after 20 seconds.
+  revokeStage() {
+    if (!this.documentId) return;
+    try { chrome.runtime.sendMessage({ type: 'STAGE_REVOKE', tabId: this.tabId, documentId: this.documentId })?.catch(() => {}); }
+    catch { /* extension context already gone */ }
   }
   shutdown() {
     this.closed = true; this.ready = false;
@@ -115,6 +142,6 @@ export class AgentClient {
     this.shutdown();
     this.reject(new Error('Agent connection closed.'));
     try { this.port?.disconnect(); } catch { /* already closed */ }
-    if (this.documentId) chrome.runtime.sendMessage({ type: 'STAGE_REVOKE', tabId: this.tabId, documentId: this.documentId }).catch(() => {});
+    this.revokeStage();
   }
 }

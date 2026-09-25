@@ -7,7 +7,7 @@
   try { previous?.dispose?.(); } catch { /* old invalidated context */ }
   const D = globalThis.ArenaAgentDOM;
   let owner = null, transaction = null, lastHeartbeat = 0, timer = null, observer = null;
-  let scanQueued = false;
+  let scanQueued = false, scanTimer = null, lastScanAt = 0;
   // Liveness comes from the port itself (it closes with the panel or page). The lease only guards
   // against a silent panel, and is long enough for Chrome's once-a-minute timer throttling.
   const LEASE_MS = 5 * 60 * 1000;
@@ -17,6 +17,7 @@
   function stopTransaction() { transaction = null; }
   function cleanup() {
     stopTransaction(); observer?.disconnect(); observer = null;
+    clearTimeout(scanTimer); scanTimer = null; scanQueued = false;
     document.removeEventListener('click', onPageClick, true);
     clearInterval(timer); timer = null;
     const old = owner; owner = null;
@@ -245,6 +246,7 @@
   function scan() {
     const tx = transaction;
     if (!owner || !tx || !tx.clicked) return;
+    lastScanAt = Date.now();
     try {
       D.checkBlocks();
       let result;
@@ -298,12 +300,19 @@
       } else { tx.completedText = ''; tx.completeAt = 0; }
     } catch (e) { error(e, tx); }
   }
+  // Arena mutates the page hundreds of times a second while it streams a reply, and every scan reads
+  // layout (getComputedStyle / getClientRects) to decide what is visible — one scan per mutation batch
+  // is a layout-thrash risk on long conversations. Pending scans are coalesced to at most one per
+  // MIN_SCAN_MS; the 300 ms timer and the panel's heartbeats keep capture moving regardless.
+  const MIN_SCAN_MS = 120;
   function queueScan() {
     if (scanQueued) return;
     scanQueued = true;
-    queueMicrotask(() => { scanQueued = false; scan(); });
+    const wait = Math.max(0, MIN_SCAN_MS - (Date.now() - lastScanAt));
+    if (!wait) { queueMicrotask(() => { scanQueued = false; scan(); }); return; }
+    scanTimer = setTimeout(() => { scanTimer = null; scanQueued = false; scan(); }, wait);
   }
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms); });
   async function prepareComposer(tx) {
     // Snapshot conversation BEFORE any review dismissal so it cannot change context unnoticed.
     tx.baseline = D.conversationReady().map(row => row.id);
@@ -455,8 +464,17 @@
       }
     } finally { if (probingPort === port) probingPort = null; }
   }
+  // Using a port the other end already closed throws. That is the only reliable sign that the previous
+  // panel is gone but this page has not yet been told: the panel closes its port and reconnects
+  // immediately, and the disconnect arrives here asynchronously. Without this check a reconnect that
+  // wins that race used to be refused with TAB_IN_USE and the session ended until the user reconnected
+  // by hand.
+  function portAlive(port) {
+    try { port.postMessage({ type: 'PING' }); return true; } catch { return false; }
+  }
   const onConnect = port => {
     if (port.name !== 'arena-agent-content-v3' || port.sender?.id !== chrome.runtime.id) return;
+    if (owner && !portAlive(owner)) cleanup(); // the old panel is gone: let this connection take over
     if (owner) {
       port.postMessage({ type: 'ERROR', code: 'TAB_IN_USE', message: 'Another extension panel is connected to this Arena tab. Disconnect it first.', clicked: false });
       port.disconnect(); return;

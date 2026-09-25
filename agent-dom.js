@@ -842,7 +842,6 @@
     // or unrecognized question card is interaction UI, never a competing final reply candidate.
     const interaction = item => item.questions.length || cardGroups(item) > 0;
     const replyLike = item => !item.pair && !item.stale && !interaction(item) && (!!item.text || ended(item.row.el));
-    const auxiliary = item => !replyLike(item);
     const replies = classified.filter(replyLike);
     if (replies.length > 1) fail('AMBIGUOUS_REPLY', `Multiple ungrouped assistant replies followed this prompt. Read the result in Arena; capture stopped rather than guessing.${rowSummary(added, list.length)}`);
     const pairs = classified.filter(item => item.pair);
