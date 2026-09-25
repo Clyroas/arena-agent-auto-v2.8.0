@@ -173,7 +173,7 @@ function render() {
   $('tab-url').textContent = tab?.url || '';
   $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.8.2 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}${drift ? ` · ${drift.text}` : ''}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
   $('adapter-state').dataset.drift = String(!!drift?.drift);
-  $('progress').textContent = pending?.status === 'error' ? 'Capture stopped. Read the error above and check the Arena tab. No manual reply entry is available.' : pending?.phase === 'review' ? 'Closing the task-review panel and waiting for the composer. No feedback is selected.' : questionState(pending?.live?.questions) === 'answerable' ? 'Review the question cards above. Select an answer, then submit it explicitly. Sensitive or unsupported actions stay in Arena.' : pending?.status === 'waiting' ? 'Your message is in Arena. The status above follows its visible activity; the final reply appears separately — no response time limit. Approvals and unsupported controls stay in Arena.' : pending?.phase === 'upload' ? 'Placing your staged files into the Arena composer, then attempting exactly one Send click…' : 'Preparing the Arena composer and attempting exactly one Send click…';
+  $('progress').textContent = pending?.status === 'error' ? 'Capture stopped. Read the error above and check the Arena tab. No manual reply entry is available.' : pending?.securityHold ? 'Tracking is paused until Arena’s security verification is completed in the Arena tab. It resumes automatically; nothing is resent.' : pending?.phase === 'review' ? 'Closing the task-review panel and waiting for the composer. No feedback is selected.' : questionState(pending?.live?.questions) === 'answerable' ? 'Review the question cards above. Select an answer, then submit it explicitly. Sensitive or unsupported actions stay in Arena.' : pending?.status === 'waiting' ? 'Your message is in Arena. The status above follows its visible activity; the final reply appears separately — no response time limit. Approvals and unsupported controls stay in Arena.' : pending?.phase === 'upload' ? 'Placing your staged files into the Arena composer, then attempting exactly one Send click…' : 'Preparing the Arena composer and attempting exactly one Send click…';
   const found = client?.ready ? client.historyCount || 0 : 0, imported = turns.filter(t => t.imported).length;
   $('history-import').hidden = !client?.ready || (!found && !imported);
   $('load-history').disabled = busy || !!historyRequest || !!pending || state !== 'ready';
@@ -608,6 +608,16 @@ function handleEvent(event) {
       if (turn.live?.pair) { turn.live.pair.choiceState = event.message; turn.live.pair.busy = false; turn.liveRevision = (turn.liveRevision || 0) + 1; }
       notice(event.message); break;
     case 'QUESTION_SENT': notice('Your answer was attempted once and Arena’s question changed. Continuing to track this task.'); break;
+    case 'BLOCKED':
+      // A transient security verification, not a failure: keep the turn alive and just say why it paused.
+      turn.securityHold = true; turn.lastActivityAt = Date.now();
+      state = 'waiting'; turn.status = 'waiting';
+      notice(`${event.code}: ${event.message} Tracking is paused, not stopped — it resumes on its own once the verification passes in Arena.`);
+      break;
+    case 'SECURITY_CLEARED':
+      turn.securityHold = false; turn.lastActivityAt = Date.now();
+      notice('The Arena verification passed. Tracking resumed automatically; nothing was resent.');
+      break;
     case 'URL_BOUND': tab.url = event.url; break;
     case 'COMPLETE':
       releaseTurnAttachments(turn);

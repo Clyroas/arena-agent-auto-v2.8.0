@@ -301,13 +301,16 @@ body:not([data-connected="false"]) #empty-connect { display: none; }
 .pending-reply[data-kind="question"] .pending-dot { animation-duration: 4s; }
 .pending-reply[data-kind="reconnecting"]::before { background: var(--orange); animation: none; }
 .pending-reply[data-kind="reconnecting"] .pending-dot { background: var(--orange); animation: pulse 1.2s ease-in-out infinite; box-shadow: none; }
+/* A security verification pauses tracking like a reconnect does: same calm orange, not the red "stopped". */
+.pending-reply[data-kind="blocked"]::before { background: var(--orange); animation: none; }
+.pending-reply[data-kind="blocked"] .pending-dot { background: var(--orange); animation: pulse 1.2s ease-in-out infinite; box-shadow: none; }
 .pending-reply[data-state="error"] .pending-dot { background: var(--red); animation: none; box-shadow: none; }
 #pending-title {
   flex: 1; min-width: 0; font-size: 14px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: linear-gradient(90deg, var(--label) 0 38%, var(--tertiary) 50%, var(--label) 62% 100%) 0 0 / 250% 100%;
   -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.4s linear infinite;
 }
-.pending-reply[data-state="error"] #pending-title, .pending-reply[data-kind="question"] #pending-title { animation: none; background: none; color: var(--label); }
+.pending-reply[data-state="error"] #pending-title, .pending-reply[data-kind="question"] #pending-title, .pending-reply[data-kind="blocked"] #pending-title { animation: none; background: none; color: var(--label); }
 .live-elapsed { font-size: 11px; color: var(--secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .live-detail {
   margin: 7px 0 0 26px; font-size: 13px; line-height: 1.5; color: var(--secondary); overflow-wrap: anywhere;

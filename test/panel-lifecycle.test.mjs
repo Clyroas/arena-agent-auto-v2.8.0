@@ -164,6 +164,40 @@ test('same-conversation reconnect keeps the local draft and history without send
   } finally { page.close(); }
 });
 
+test('a security verification pauses the panel instead of stopping the turn, and clearing it resumes', async () => {
+  const page = await open();
+  try {
+    const turn = { id: 'sec', prompt: 'hello', reply: '', status: 'waiting', attachments: [] };
+    page.ui.setTurn(turn);
+    page.ui.handleEvent({ type: 'BLOCKED', requestId: 'sec', code: 'SECURITY_CHECK', message: 'Arena is showing a security verification.', clicked: true, accepted: true });
+    // The turn must stay alive: not an error, not released, still the pending reply.
+    assert.equal(page.ui.current.state, 'waiting');
+    assert.equal(turn.status, 'waiting');
+    assert.equal(turn.securityHold, true);
+    assert.equal(page.ui.current.pending, turn, 'the pending card must survive a transient verification');
+    assert.equal(page.w.document.getElementById('pending').dataset.kind, 'blocked');
+    assert.match(page.w.document.getElementById('pending-title').textContent, /Waiting for verification/);
+    assert.match(page.w.document.getElementById('notice-text').textContent, /paused, not stopped/);
+    // Clearing the verification resumes without a resend and restores the normal status.
+    page.ui.handleEvent({ type: 'SECURITY_CLEARED', requestId: 'sec' });
+    assert.equal(turn.securityHold, false);
+    assert.equal(page.ui.current.pending, turn);
+    assert.match(page.w.document.getElementById('notice-text').textContent, /resumed automatically/);
+  } finally { page.close(); }
+});
+
+test('a security BLOCKED event does not release staged attachments like a stop would', async () => {
+  const page = await open();
+  try {
+    const turn = { id: 'sec2', prompt: 'hello', reply: '', status: 'sending', attachments: [], files: [new File(['secret'], 'a.txt')], payload: [{ data: 'secret' }] };
+    page.ui.setTurn(turn);
+    page.ui.handleEvent({ type: 'BLOCKED', requestId: 'sec2', code: 'SECURITY_CHECK', message: 'Arena is showing a security verification.' });
+    assert.equal(turn.status, 'waiting', 'a pause is not a stop');
+    assert.ok(turn.files, 'staged files must remain available so the user can retry after verifying');
+    assert.equal(page.ui.current.state, 'waiting');
+  } finally { page.close(); }
+});
+
 test('model mismatch blocks Send until the user explicitly confirms the actual model', async () => {
   let sends = 0;
   const page = await open({ send: async () => { sends++; } });
