@@ -20,6 +20,7 @@ test('every runtime version anchor matches the manifest', () => {
   const anchors = [
     ['agent-client.js', /ADAPTER_VERSION = '([^']+)'/],
     ['attachment.js', /ADAPTER_VERSION = '([^']+)'/],
+    ['attachment-policy.js', /const VERSION = '([^']+)'/],
     ['agent-dom.js', /globalThis\.ArenaAgentDOM = \{ version: '([^']+)'/],
     ['agent-content.js', /const VERSION = '([^']+)'/],
     ['agent-content.js', /adapterVersion: '([^']+)'/],

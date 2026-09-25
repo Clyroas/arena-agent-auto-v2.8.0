@@ -75,7 +75,7 @@ test('a successful handshake turns the port into a ready client', async () => {
   assert.equal(client.pageKind, 'direct');
   assert.equal(client.model, 'Max');
   assert.deepEqual(client.models, [{ name: 'Max', org: 'Arena' }]);
-  assert.equal(ADAPTER_VERSION, '2.8.1');
+  assert.equal(ADAPTER_VERSION, '2.8.2');
   assert.ok(HEARTBEAT_MS > 0);
   client.close();
   assert.equal(port.disconnected, true);
@@ -192,4 +192,68 @@ test('methods refuse to run on a connection that is gone', async () => {
   assert.throws(() => client.watch('req-5', 'p', 'user-1', 'https://arena.ai/agent', false), /not ready/);
   assert.throws(() => client.answer('req-5', { token: 't', kind: 'option', index: 0 }), /not ready/);
   assert.throws(() => client.loadHistory('req-6', 'https://arena.ai/agent'), /not ready/);
+});
+
+test('handshake budget begins after attach, and timeout closes the unready port', async () => {
+  const events = [];
+  const { port } = installChrome({ attach: async () => {
+    await new Promise(resolve => { setTimeout(resolve, 35); });
+    return { ok: true, value: { documentId: 'slow-doc' } };
+  } });
+  const client = new AgentClient(42, event => events.push(event), undefined, { attach: 500, handshake: 15 });
+  await assert.rejects(client.readiness, /Connection setup timed out/);
+  assert.ok(port.posted.some(message => message.type === 'PROBE'), 'attach must finish before the short handshake starts');
+  assert.equal(client.closed, true);
+  assert.equal(port.disconnected, true);
+  assert.equal(port.posted.some(message => message.type === 'SEND'), false);
+});
+
+test('an Arena dialog gets a bounded, non-renewing human-interaction deadline', async () => {
+  const { port } = installChrome();
+  const client = new AgentClient(42, () => {}, undefined, { handshake: 100, dialog: 20 });
+  await until(() => port.posted.some(message => message.type === 'PROBE'));
+  port.emit({ type: 'WAITING' });
+  const timer = client.timeout;
+  port.emit({ type: 'WAITING' });
+  assert.equal(client.timeout, timer, 'repeated WAITING must not extend the deadline');
+  await assert.rejects(client.readiness, /timed out/);
+  assert.equal(client.closed, true);
+  assert.equal(port.disconnected, true);
+});
+
+test('cancelling connection setup ignores a late READY', async () => {
+  const { port } = installChrome();
+  const client = new AgentClient(42, () => {});
+  await until(() => port.posted.some(message => message.type === 'PROBE'));
+  client.close();
+  port.emit({ type: 'READY', adapterVersion: ADAPTER_VERSION });
+  await assert.rejects(client.readiness, /closed/);
+  assert.equal(client.ready, false);
+});
+
+test('a silent open port pauses sending without resending or terminating a long generation', async () => {
+  const events = [];
+  const { client, port } = await connect(events);
+  client.lastInbound = 0; client.checkHealth(); client.checkHealth();
+  assert.equal(client.silent, true);
+  assert.equal(client.ready, true);
+  assert.equal(client.closed, false);
+  assert.equal(events.filter(event => event.type === 'TRANSPORT_HEALTH').length, 1);
+  await assert.rejects(client.send('x', 'hello', 'https://arena.ai/agent'), /not responding/);
+  assert.equal(port.posted.some(message => message.type === 'SEND'), false);
+  port.emit({ type: 'PONG' });
+  assert.equal(client.silent, false);
+  assert.equal(events.at(-2).responsive, true);
+  client.close();
+});
+
+test('synchronous Chrome attach failures are reported after the caller owns the client reference', async () => {
+  installChrome();
+  globalThis.chrome.runtime.sendMessage = () => { throw new Error('Extension context invalidated'); };
+  const events = [];
+  let client;
+  client = new AgentClient(42, event => { assert.ok(client); events.push(event); });
+  await assert.rejects(client.readiness, /Extension context invalidated/);
+  assert.equal(events.length, 1);
+  assert.equal(client.closed, true);
 });

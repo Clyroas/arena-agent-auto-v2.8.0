@@ -6,7 +6,9 @@ and captures the matching reply from the transcript. There is no manual fallback
 API client: if the page can't be driven reliably, the extension fails closed with an explanation
 instead of guessing.
 
-Version 2.8.1 · no build step · no runtime dependencies.
+Version 2.8.2 · no build step · no runtime dependencies.
+
+See [CHANGELOG.md](CHANGELOG.md) for 2.8.2 and [implementation status](docs/IMPLEMENTATION-STATUS.md) for completed work, verification limits, and remaining improvements. Reload both the extension and your Arena tabs after updating.
 
 ## What it does
 
@@ -18,6 +20,7 @@ Version 2.8.1 · no build step · no runtime dependencies.
   then reconnects and automatically restores your previous live window and tab once ready.
   No manual tab click is needed to start loading; nothing is sent. Sign-in and Arena
   dialogs still require your input.
+- **Recovery without resending** — reconnecting to the same conversation keeps your local draft and history. Verified accepted messages can be tracked again read-only. Connection setup can be cancelled, and a nonresponsive tab pauses new sends without interrupting generation.
 - **Live activity view** — while Arena works, the panel shows the in-progress text (with a caret
   while genuinely still streaming), tool steps as they start, clarification cards you can answer,
   and response pairs you can choose between — all marked *not a final answer* until Arena finishes.
@@ -26,9 +29,9 @@ Version 2.8.1 · no build step · no runtime dependencies.
   your explicit Send, through a single-use, 20-second grant.
 - **Link screenshots** (optional, opt-in permission) — turn a link into a full-page screenshot as
   message context. The page opens in a small popup window, is scrolled and captured in up to 24
-  slices, stitched, and staged like a pasted image. Nothing is stored.
+  slices, stitched, and staged like a pasted image. Cancel capture at any time; changing the draft cancels it too. Send waits for capture to finish or be cancelled. Nothing is persisted.
 - **Copy buttons** — reply text as Markdown, and code blocks. Write-only: the clipboard is never
-  read, and nothing is ever pasted into Arena this way.
+  read in the background; explicit user paste events in the composer are handled normally. Copy buttons never paste into Arena.
 - **Appearance** — light/dark/system theme, text size, accent colour, and a list of the last 5
   Direct model names you opened. That is everything the extension persists.
 
@@ -87,7 +90,7 @@ The extension has no build step; dev tooling is Node-based and dev-only (`node >
 
 ```bash
 npm install
-npm run check     # eslint + 98 tests (node --test)
+npm run check     # eslint + Node/jsdom regression tests
 npm run lint
 npm test
 ```
@@ -104,6 +107,16 @@ calls with fakes, so everything on screen is produced by the production code pat
 [docs/development.md](docs/development.md) for the test-suite map, the version-bump checklist, and
 the conventions CI enforces.
 
+### Browser tests and packaging
+
+```bash
+npx playwright install --with-deps chromium
+npm run test:browser       # synthetic fixtures; no Arena credentials or live network requests
+npm run package:extension  # load dist/arena-auto-chat-2.8.2 unpacked, or use the repository directly
+```
+
+Browser tests require a working Chromium installation. The initial implementation sandbox could not download/start that browser, so do not confuse the passing Node suite with verified live-site compatibility. CI installs Chromium separately. Packaging uses `extension-files.json` and excludes dependencies, tests, dev preview, and repository metadata.
+
 ## Repository map
 
 | Path | Role |
@@ -115,10 +128,10 @@ the conventions CI enforces.
 | `agent-client.js` | Panel-side connection client: the direct port, heartbeat, timeouts |
 | `panel.js` / `panel.html` / `panel.css` | The side panel (and floating window) UI |
 | `conversation-view.js`, `live-view.js`, `rich-view.js`, `live-status.js` | Transcript and live-activity rendering |
-| `attachment-policy.js`, `attachment.js`, `stage-main.js` | Staged-file rules, worker attach, main-world insertion |
+| `attachment-policy.js`, `attachment-state.js`, `attachment.js`, `stage-main.js` | Staged-file rules, worker attach, main-world insertion |
 | `screenshot.js` | Link screenshots (optional permission, opt-in per use) |
-| `core.js`, `copy.js`, `theme.js`, `customization.js`, `recent-models.js`, `window-geometry.js`, `floating-window.js` | Small shared modules |
+| `core.js`, `copy.js`, `theme.js`, `customization.js`, `recent-models.js`, `window-geometry.js`, `floating-window.js`, `tab-awake.js` | Small shared modules |
 | `dev/` | Dev-only motion preview (not part of the extension) |
-| `test/` | 98 tests via `node --test` (jsdom where the DOM matters) |
+| `test/` | Node/jsdom regressions plus opt-in Chromium extension fixtures |
 | `STABILITY-REVIEW.md` | The end-to-end stability pass: fixes, additions, open findings |
 | `docs/` | Architecture and development guides |

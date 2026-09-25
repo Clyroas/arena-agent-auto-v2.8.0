@@ -22,3 +22,23 @@ jobs:
       # the manifest - a mismatch there disables the extension at runtime.
       - run: npm run lint
       - run: npm test
+      - run: npm run package:extension
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # All web requests are intercepted by synthetic fixtures. No signed-in Arena account is used.
+      - run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: test-results/
+          retention-days: 7

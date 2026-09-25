@@ -1,5 +1,7 @@
 # Stability review — Arena Auto Chat 2.8.0
 
+> Historical 2.8.0 review. Some open findings below were resolved later. Current work is tracked in [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md); a README now exists.
+
 Reviewed the extension end to end (13 modules, ~3,600 lines) for the failure modes that make it *stop
 working* rather than do the wrong thing: hangs, dropped connections, races, unbounded work, and silent
 degradation. The fail-closed behaviour that the code is deliberately built around (never guess, never

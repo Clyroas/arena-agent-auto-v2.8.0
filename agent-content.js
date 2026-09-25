@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '2.8.1';
+  const VERSION = '2.8.2';
   const runtime = chrome.runtime;
   const previous = globalThis.__ARENA_AGENT_REGISTRATION__;
   if (previous?.version === VERSION && previous.isAlive?.()) return;
@@ -13,8 +13,33 @@
   const LEASE_MS = 5 * 60 * 1000;
   const consumed = new Set();
   const documentId = crypto.randomUUID();
-  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.8.1' }); } catch { cleanup(); } }
-  function stopTransaction() { transaction = null; }
+  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.8.2' }); } catch { cleanup(); } }
+  const STAGE_TIMEOUT_MS = 10000;
+  function clearStaging(tx) {
+    if (!tx) return;
+    if (tx.stageToken) {
+      for (const input of document.querySelectorAll('input[type="file"][data-arena-agent-stage]'))
+        if (input.getAttribute('data-arena-agent-stage') === tx.stageToken) input.removeAttribute('data-arena-agent-stage');
+      tx.stageToken = null;
+      try { chrome.runtime.sendMessage({ type: 'CLEAR_STAGE' }).catch(() => {}); } catch { /* context closing */ }
+    }
+    for (const item of tx.staged || []) item.bytes = new Uint8Array(0);
+    tx.staged = [];
+  }
+  function stopTransaction() {
+    const old = transaction; transaction = null;
+    old?.abort?.abort(); clearStaging(old);
+  }
+  function stageResponse(promise, tx) {
+    return new Promise((resolve, reject) => {
+      const finish = (fn, value) => { clearTimeout(timer); tx.abort.signal.removeEventListener('abort', cancel); fn(value); };
+      const cancel = () => finish(reject, new D.DomError('CANCELLED', 'Staging cancelled. Check the Arena composer; nothing was retried.'));
+      const timer = setTimeout(() => finish(reject, new D.DomError('STAGE_TIMEOUT', 'File staging did not answer within 10 seconds. No Send click was attempted. Check the Arena composer before trying again.')), STAGE_TIMEOUT_MS);
+      tx.abort.signal.addEventListener('abort', cancel, { once: true });
+      if (tx.abort.signal.aborted) cancel();
+      Promise.resolve(promise).then(value => finish(resolve, value), error => finish(reject, error));
+    });
+  }
   function cleanup() {
     stopTransaction(); observer?.disconnect(); observer = null;
     clearTimeout(scanTimer); scanTimer = null; scanQueued = false;
@@ -76,16 +101,11 @@
     if (!A) D.fail('ADAPTER_ERROR', 'The attachment policy failed to load. No prompt was sent.');
     if (list.length > A.ATTACHMENT_POLICY.maxFiles) D.fail('INVALID_ATTACHMENT', `Only ${A.ATTACHMENT_POLICY.maxFiles} files can accompany one message.`);
     return list.map(item => {
-      if (!item || typeof item.name !== 'string' || typeof item.type !== 'string' || typeof item.data !== 'string' ||
-          item.data.length > Math.ceil(A.ATTACHMENT_POLICY.maxBytes * 4 / 3) + 8)
-        D.fail('INVALID_ATTACHMENT', 'Every attachment needs a name, type and encoded contents within the size limit.');
-      const { accepted, rejected } = A.validateAttachments([{ name: item.name, type: item.type, size: Math.round(item.data.length * 3 / 4) }]);
-      if (rejected.length || !accepted.length) D.fail('INVALID_ATTACHMENT', rejected[0]?.reason || 'That file is not supported.');
-      const bytes = A.base64ToBytes(item.data);
-      if (!bytes.byteLength || bytes.byteLength > A.ATTACHMENT_POLICY.maxBytes) D.fail('INVALID_ATTACHMENT', 'The attachment contents are empty or exceed the size limit.');
-      return { name: accepted[0].name, type: accepted[0].type, bytes };
+      try { return A.decodeAttachment(item); }
+      catch (e) { return D.fail('INVALID_ATTACHMENT', e.message); }
     });
   }
+
   // Attachment chips may add a short suffix; the wording itself must stay identical.
   function composerMatches(tx, text) { return D.promptMatches(tx, text); }
   // After the one Send click: signs that Arena took the message even though it has not drawn the user
@@ -108,12 +128,13 @@
     // Marks exactly one verified composer input; the page-context helper refuses anything else.
     const request = D.stageRequestFor(field, tx.staged.map(item => ({ name: item.name, type: item.type, size: item.bytes.byteLength })));
     tx.stageToken = request.token;
+    const expiresAt = Date.now() + STAGE_TIMEOUT_MS;
     emit({ type: 'STAGED', requestId: tx.requestId, count: tx.staged.length });
     // Bytes are handed to the worker and written by the page-context staging helper, then erased here.
     const payload = tx.staged.map(item => ({ name: item.name, type: item.type, data: A.bytesToBase64(item.bytes) }));
     let response;
-    try { response = await chrome.runtime.sendMessage({ type: 'STAGE_FILES', token: request.token, files: payload }); }
-    catch (e) { D.fail('STAGE_FAILED', `The extension worker could not stage the files (${e?.message || 'no response'}).`); }
+    try { response = await stageResponse(chrome.runtime.sendMessage({ type: 'STAGE_FILES', token: request.token, expiresAt, files: payload }), tx); }
+    catch (e) { D.fail(e.code || 'STAGE_FAILED', `The extension worker could not stage the files (${e?.message || 'no response'}).`); }
     finally { for (const item of payload) item.data = ''; payload.length = 0; }
     if (transaction !== tx || !owner) return false;
     if (!response?.ok) D.fail(response?.code || 'STAGE_FAILED', `${response?.error || 'The files could not be placed in the Arena composer.'} Nothing was sent; the extension did not retry or fall back.`);
@@ -374,7 +395,7 @@
     if (consumed.has(message.requestId)) return emit({ type: 'ERROR', requestId: message.requestId, code: 'DUPLICATE_REQUEST', message: 'This request was already attempted. It will not be sent again.', clicked: false });
     consumed.add(message.requestId);
     if (consumed.size > 128) consumed.delete(consumed.values().next().value);
-    const tx = { requestId: message.requestId, prompt: message.prompt.trim(), url: location.href, clicked: false };
+    const tx = { requestId: message.requestId, prompt: message.prompt.trim(), url: location.href, clicked: false, abort: new AbortController() };
     transaction = tx;
     try {
       if (!D.samePage(message.url, location.href)) D.fail('CONVERSATION_CHANGED', 'The tab URL changed. Reconnect before sending.');
@@ -388,7 +409,7 @@
       emit({ type: 'SENDING', requestId: tx.requestId, inputKind: field.tagName === 'TEXTAREA' ? 'textarea' : 'contenteditable' });
       if (transaction !== tx || !owner) return;
       D.writeComposer(field, tx.prompt);
-      try { tx.staged = attachmentsFor(message.attachments); } catch (e) { tx.staged = []; D.fail(e.code || 'INVALID_ATTACHMENT', e.message); }
+      try { tx.staged = attachmentsFor(message.attachments); message.attachments = null; } catch (e) { tx.staged = []; D.fail(e.code || 'INVALID_ATTACHMENT', e.message); }
       if (tx.staged.length && !(await stageAttachments(tx, field))) return;
       if (transaction !== tx || !owner) return;
       const enableDeadline = Date.now() + 2500;
@@ -410,17 +431,10 @@
       // Exactly one click attempt. No click/Enter retry on any failure or disconnect.
       tx.clicked = true; tx.ackDeadline = Date.now() + 15000;
       button.click(); scan();
-    } catch (e) { error(e, tx); }
-    finally {
-      if (tx.stageToken) {
-        for (const input of document.querySelectorAll('input[type="file"][data-arena-agent-stage]'))
-          if (input.getAttribute('data-arena-agent-stage') === tx.stageToken) input.removeAttribute('data-arena-agent-stage');
-        try { chrome.runtime.sendMessage({ type: 'CLEAR_STAGE' }).catch(() => {}); } catch { /* context closing */ }
-      }
-      for (const item of tx.staged || []) item.bytes = new Uint8Array(0);
-      tx.staged = [];
-    }
+    } catch (e) { if (transaction === tx) error(e, tx); }
+    finally { clearStaging(tx); }
   }
+
   // Explicit, read-only snapshot of the earlier turns currently rendered in this conversation.
   function loadHistory(message) {
     const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 80) : '';

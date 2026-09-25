@@ -37,7 +37,7 @@ function open() {
   const counters = { matchTurn: 0, checkBlocks: 0 };
   class DomError extends Error { constructor(code, message) { super(message); this.code = code; } }
   window.ArenaAgentDOM = {
-    version: '2.8.1', counters, DomError,
+    version: '2.8.2', counters, DomError,
     samePage: () => true,
     checkBlocks: () => { counters.checkBlocks++; },
     rows: () => [{ id: 'user-1', user: true }],
@@ -61,7 +61,7 @@ test('the content script registers once and reports its version to the panel', (
   const page = open();
   try {
     assert.equal(page.connectListeners.length, 1);
-    assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.version, '2.8.1');
+    assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.version, '2.8.2');
     assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.isAlive(), true);
     page.window.eval(source); // a second injection of the same version must not stack listeners
     assert.equal(page.connectListeners.length, 1);
@@ -150,5 +150,61 @@ test('disconnecting the panel stops the capture loop and its timers', async () =
     assert.equal(again.disconnected, false);
     again.emit({ type: 'PING' });
     assert.ok(again.posted.some(message => message.type === 'PONG'));
+  } finally { page.close(); }
+});
+
+function stageHarness(page) {
+  const w = page.window;
+  w.eval(readFileSync(new URL('../attachment-policy.js', import.meta.url), 'utf8'));
+  const form = w.document.createElement('form');
+  form.innerHTML = '<textarea></textarea><input type="file" multiple><button type="button">Send</button>';
+  w.document.body.append(form);
+  const field = form.querySelector('textarea'), input = form.querySelector('input'), button = form.querySelector('button');
+  let clicks = 0, finish;
+  button.addEventListener('click', () => { clicks++; });
+  Object.assign(w.ArenaAgentDOM, {
+    rows: () => [], conversationReady: () => [], reviewPanel: () => null,
+    preflight: () => ({ field }), writeComposer: (field, text) => { field.value = text; },
+    composer: () => field, composerText: field => field.value, promptMatches: (tx, text) => tx.prompt === text,
+    uploadsFor: () => ({ input }), running: () => false, sendButton: () => button, enabled: () => true,
+    stageRequestFor: () => { const token = w.crypto.randomUUID(); input.setAttribute('data-arena-agent-stage', token); return { input, token }; }
+  });
+  w.chrome.runtime.sendMessage = message => message.type === 'STAGE_FILES'
+    ? new Promise(resolve => { finish = resolve; }) : Promise.resolve({ ok: true });
+  const port = page.connect(makePort());
+  const requestId = w.crypto.randomUUID();
+  const start = () => port.emit({ type: 'SEND', requestId, prompt: 'hello', url: w.location.href,
+    attachments: [{ name: 'a.txt', type: 'text/plain', data: 'eA==' }] });
+  return { input, port, requestId, start, clicks: () => clicks, finish: () => finish?.({ ok: true, value: { ok: true, files: [{ name: 'a.txt', size: 1 }] } }) };
+}
+
+test('staging timeout removes the single-use marker and ignores a late worker response', async () => {
+  const page = open();
+  try {
+    let deadline;
+    const nativeTimeout = page.window.setTimeout.bind(page.window);
+    page.window.setTimeout = (fn, ms) => { if (ms === 10000) { deadline = fn; return 0; } return nativeTimeout(fn, ms); };
+    const h = stageHarness(page); h.start();
+    await sleep(10);
+    assert.ok(h.input.hasAttribute('data-arena-agent-stage'));
+    assert.equal(typeof deadline, 'function');
+    deadline(); await sleep(10);
+    assert.equal(h.port.posted.find(event => event.type === 'ERROR')?.code, 'STAGE_TIMEOUT');
+    assert.equal(h.input.hasAttribute('data-arena-agent-stage'), false);
+    h.finish(); await sleep(20);
+    assert.equal(h.clicks(), 0);
+  } finally { page.close(); }
+});
+
+test('cancelling staged preparation removes the marker immediately and never clicks Send later', async () => {
+  const page = open();
+  try {
+    const h = stageHarness(page); h.start(); await sleep(10);
+    assert.ok(h.input.hasAttribute('data-arena-agent-stage'));
+    h.port.emit({ type: 'CANCEL', requestId: h.requestId });
+    assert.equal(h.input.hasAttribute('data-arena-agent-stage'), false);
+    h.finish(); await sleep(20);
+    assert.equal(h.clicks(), 0);
+    assert.equal(h.port.posted.some(event => event.type === 'ERROR'), false, 'cancelled work must not emit a late error into another transaction');
   } finally { page.close(); }
 });

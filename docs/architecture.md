@@ -1,6 +1,6 @@
 # Architecture
 
-How Arena Auto Chat 2.8.1 is put together: the three Chrome contexts, the wire between them, and
+How Arena Auto Chat 2.8.2 is put together: the three Chrome contexts, the wire between them, and
 the paths a message, a file and a screenshot take. Companion to [STABILITY-REVIEW.md](../STABILITY-REVIEW.md),
 which documents why the guarantees below exist.
 
@@ -25,15 +25,15 @@ Two structural decisions shape everything else:
 
 ## The wire
 
-The version string is part of the protocol (`ADAPTER_VERSION` / `VERSION` = `2.8.1`, anchored in ten
-places and checked by `test/version-sync.test.mjs`). The panel refuses an adapter that reports a
+The version string is part of the protocol (`ADAPTER_VERSION` / `VERSION` = `2.8.2`, checked across the runtime
+files by `test/version-sync.test.mjs`). The panel refuses an adapter that reports a
 different version, and the worker refuses a page whose injected script did not register.
 
 Panel ⇄ content script port messages include `PROBE`, `READY`, `PING`/`PONG`, `MODEL`/`MODEL_INFO`,
 `SEND`, `CANCEL`/`CANCELLED`, `ANSWER_QUESTION`, `CHOOSE_RESPONSE`, `LOAD_HISTORY`, and streamed
 event frames. The port itself provides liveness (it closes with the panel or the page); a heartbeat
 every 10 s keeps state flowing, and a 5-minute lease in the content script guards against a silent
-panel — sized to survive Chrome's once-a-minute timer throttling.
+panel — sized to survive Chrome's once-a-minute timer throttling. The panel separately reports 90 seconds without inbound frames as a nonresponsive tab and pauses new sends; it does not terminate generation or resend.
 
 Panel ⇄ worker one-shots (`chrome.runtime.sendMessage`) are bounded by `RPC_TIMEOUT_MS` (20 s) in
 the panel, so a worker that is restarted mid-request cannot leave the panel stuck in `busy` (which
@@ -69,8 +69,8 @@ for extension pages, `window.ArenaAgentAttachments` for the classic content scri
 
 On **Send with files**: the panel asks the worker for a single-use grant keyed by
 `tabId:documentId` with a 20-second window; the worker injects `stage-main.js` into the main world;
-the helper finds the file input marked with the grant token, inserts exactly the approved bytes, and
-returns only file metadata. Grants are pruned eagerly and released per document. A staged file that
+the helper finds the file input marked with the grant token, checks the request expiry, inserts exactly the approved bytes with the native FileList setter, consumes the marker, and
+returns only file metadata. The content-side wait is limited to 10 seconds; cancellation/timeout removes the marker so a delayed helper cannot use it. This acknowledges insertion, not completion of a site upload. Grants are pruned eagerly and released per document. A staged file that
 cannot be matched exactly (name + size + type when reported) is skipped with a visible note — never
 substituted. Bytes are never stored, logged, cached, or sent anywhere else.
 
@@ -90,12 +90,12 @@ permission, requested on first use and revocable in Settings. Nothing is stored.
 | Theme (`light`/`dark`/`system`) | panel `localStorage` (`arenaAgentTheme`) | Appearance only |
 | Text size, accent | panel `localStorage` (`arenaAgentAppearance`) | Whitelist-normalized on load |
 | Recent Direct models (names, max 5) | panel `localStorage` (`arena-auto-recent-models`) | Names only, ≤ 120 chars |
-| Floating window bounds | `chrome.storage` via `window-geometry.js` | Numeric normal-window bounds only |
+| Floating window bounds | `localStorage` via `window-geometry.js` | Numeric normal-window bounds only |
 | Staged file bytes | panel memory | Only for the current Send; single-use grant |
 | Chat content, prompts, replies, screenshots, account data | — | Never stored anywhere |
 
 Extension pages declare `connect-src 'none'`: the extension itself makes no network requests.
-`copy.js` writes to the clipboard on the user's click and never reads it.
+`copy.js` writes to the clipboard on the user's click. The panel handles explicit text/image paste events but never performs background clipboard reads.
 
 ## Module index
 
@@ -113,3 +113,13 @@ Extension pages declare `connect-src 'none'`: the extension itself makes no netw
 | `worker.js` | One-shot router: attach, staged grants, floating window |
 | `floating-window.js` / `window-geometry.js` | Popup window creation and bound fitting |
 | `theme.js` / `customization.js` / `recent-models.js` / `copy.js` | Appearance, recents, clipboard write |
+
+## 2.8.2 recovery additions
+
+- `attachment-state.js` preserves source File identity, transfers unsent originals back to a draft, and drops historical references. Transport payloads stay local to the send operation and are released in `finally`.
+- `tab-awake.js` serializes acquire/release and restores the original tab flag; worker navigation does not change discardability.
+- ATTACH and handshake have separate budgets (20 s and 15 s). WAITING for an Arena dialog allows at most 120 s, with independent Open Arena / Cancel connection controls. History requests have a 15 s deadline.
+- Screenshot operations carry a session epoch, exact draft and AbortController. Capture is document-bound; stitching decodes one bitmap at a time and caps total canvas pixels. User focus is restored only if the capture window still held it.
+- Same-page explicit reconnect preserves local content and re-watches only verified accepted message IDs. A different conversation still requires confirmation and a new connection.
+
+See [implementation status](IMPLEMENTATION-STATUS.md) for test coverage, browser-validation limitations and work deliberately not yet implemented.

@@ -4,26 +4,35 @@
 // idle worker can no longer drop the chat connection.
 import { withTimeout } from './core.js';
 
-export const ADAPTER_VERSION = '2.8.1';
+export const ADAPTER_VERSION = '2.8.2';
 export const HEARTBEAT_MS = 10000;
 // Worker requests made while a Send is being prepared must not wait forever: the panel would otherwise
 // stay in “Sending…” with the staged bytes held in memory. Both are bounded well below the point where a
 // user would retry by hand.
 export const ATTACH_TIMEOUT_MS = 20000;
 export const GRANT_TIMEOUT_MS = 10000;
+export const HANDSHAKE_TIMEOUT_MS = 15000;
+export const DIALOG_TIMEOUT_MS = 120000;
+export const SILENT_PORT_MS = 90000;
 
 export class AgentClient {
   // `timeouts` exists so tests can exercise the failed-worker paths without waiting out the real ones;
   // the panel always uses the defaults.
   constructor(tabId, onEvent, expectedUrl, timeouts = {}) {
     this.closed = false; this.ready = false; this.onEvent = onEvent; this.tabId = tabId; this.port = null;
-    this.timeouts = { attach: timeouts.attach ?? ATTACH_TIMEOUT_MS, grant: timeouts.grant ?? GRANT_TIMEOUT_MS };
+    this.timeouts = { attach: timeouts.attach ?? ATTACH_TIMEOUT_MS, grant: timeouts.grant ?? GRANT_TIMEOUT_MS,
+      handshake: timeouts.handshake ?? HANDSHAKE_TIMEOUT_MS, dialog: timeouts.dialog ?? DIALOG_TIMEOUT_MS, silent: timeouts.silent ?? SILENT_PORT_MS };
     this.readiness = new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
     this.readiness.catch(() => {}); // callers await it; avoid unhandled rejections after close
-    this.timeout = setTimeout(() => this.fail('ADAPTER_HANDSHAKE_TIMEOUT: The Agent adapter did not finish connecting within 15 seconds. Check the Arena tab and this extension’s Site access in chrome://extensions. No prompt was sent.'), 15000);
-    this.start(expectedUrl);
+    // Attachment has its own budget. Do not spend the handshake budget before a port exists.
+    // Defer callbacks until the caller has assigned its client reference, even if Chrome throws
+    // synchronously (for example an extension context invalidated by an update).
+    Promise.resolve().then(() => this.start(expectedUrl)).catch(error => {
+      if (!this.closed) this.lost(error?.message || 'The connection could not start.');
+    });
   }
   async start(expectedUrl) {
+    if (this.closed) return;
     let attached;
     try {
       const result = await withTimeout(chrome.runtime.sendMessage({ type: 'ATTACH', tabId: this.tabId, expectedUrl }), this.timeouts.attach,
@@ -33,11 +42,12 @@ export class AgentClient {
     } catch (error) {
       if (this.closed) return;
       const message = `${error.code || 'CONNECTION_FAILED'}: ${error.message}`;
-      this.fail(message); this.onEvent({ type: 'ERROR', code: error.code || 'CONNECTION_FAILED', message: error.message, clicked: false });
+      this.fail(message); this.close(); this.onEvent({ type: 'ERROR', code: error.code || 'CONNECTION_FAILED', message: error.message, clicked: false });
       return;
     }
     if (this.closed) return;
-    this.documentId = attached.documentId;
+    this.documentId = attached.documentId; this.lastInbound = Date.now();
+    this.armHandshake(this.timeouts.handshake);
     try { this.port = chrome.tabs.connect(this.tabId, { name: 'arena-agent-content-v3', documentId: attached.documentId }); }
     catch (error) { this.lost(`Chrome could not open a connection to the Arena tab (${error.message}).`); return; }
     this.port.onMessage.addListener(event => this.handle(event));
@@ -47,12 +57,31 @@ export class AgentClient {
     });
     this.heartbeat = setInterval(() => {
       if (this.closed) return;
+      this.checkHealth();
       try { this.port.postMessage({ type: 'PING' }); } catch { this.lost('The Arena tab connection closed.'); }
     }, HEARTBEAT_MS);
     this.post({ type: 'PROBE' });
   }
+  checkHealth() {
+    if (this.ready && !this.closed && !this.silent && Date.now() - this.lastInbound > this.timeouts.silent) {
+      this.silent = true;
+      this.onEvent({ type: 'TRANSPORT_HEALTH', responsive: false });
+    }
+  }
+  armHandshake(ms) {
+    clearTimeout(this.timeout);
+    this.timeout = setTimeout(() => {
+      if (this.closed || this.ready) return;
+      const message = 'Connection setup timed out. Open the Arena tab, close any dialog, then reconnect. No prompt was sent.';
+      this.fail(`ADAPTER_HANDSHAKE_TIMEOUT: ${message}`);
+      this.close();
+      this.onEvent({ type: 'ERROR', code: 'ADAPTER_HANDSHAKE_TIMEOUT', message, clicked: false });
+    }, ms);
+  }
   handle(event) {
-    if (this.closed) return;
+    if (this.closed || !event || typeof event.type !== 'string') return;
+    this.lastInbound = Date.now();
+    if (this.silent) { this.silent = false; this.onEvent({ type: 'TRANSPORT_HEALTH', responsive: true }); }
     if (event.type === 'READY') {
       if (event.adapterVersion !== ADAPTER_VERSION) {
         const message = 'Wrong content-script version. Reload the Arena tab after updating the extension, then reconnect.';
@@ -63,8 +92,10 @@ export class AgentClient {
       this.setModelInfo(event); clearTimeout(this.timeout); this.resolve(event);
     }
     if (event.type === 'MODEL_INFO') this.setModelInfo(event);
-    // Arena dialog over the message box: the user must close it in Arena, so no handshake deadline.
-    if (event.type === 'WAITING' && !this.ready) clearTimeout(this.timeout);
+    // Give a human time to close an Arena dialog, but never wait forever or reset on repeated WAITING.
+    if (event.type === 'WAITING' && !this.ready && !this.waitingForDialog) {
+      this.waitingForDialog = true; this.armHandshake(this.timeouts.dialog);
+    }
     if (event.type === 'SENDING') { this.reviewPending = false; this.inputKind = event.inputKind || this.inputKind; }
     if (event.type === 'ERROR' && !this.ready) this.fail(`${event.code || 'CONNECTION_FAILED'}: ${event.message}`);
     this.onEvent(event);
@@ -80,13 +111,13 @@ export class AgentClient {
   lost(message) {
     if (this.closed) return;
     const wasReady = this.ready;
-    this.fail(message); this.shutdown();
+    this.fail(message); this.close();
     this.onEvent({ type: 'BRIDGE_LOST', code: 'CONNECTION_LOST', message, wasReady });
   }
   post(message) { if (this.closed || !this.port) throw new Error('The Arena connection is not ready.'); this.port.postMessage(message); }
   fail(message) { clearTimeout(this.timeout); this.reject(new Error(message)); }
   async send(requestId, prompt, url, attachments) {
-    if (this.closed || !this.ready) throw new Error('The Agent adapter is not connected. Reconnect to Arena.');
+    if (this.closed || !this.ready || this.silent) throw new Error('The Agent adapter is not responding. Open the Arena tab before sending.');
     if (attachments?.length) {
       // Single-use, 20-second permission for the page-context file insertion of this one Send. Bounded,
       // so a restarting worker cannot leave the panel stuck with the bytes still staged.
