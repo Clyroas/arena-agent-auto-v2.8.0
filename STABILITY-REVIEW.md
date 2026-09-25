@@ -68,8 +68,16 @@ Guard rails, all enforced by `test/stylesheet.test.mjs`:
   the breathing thought label, the notice ping) are allowed to run continuously.
 
 `dev/preview.html` renders the real panel against a fake Arena tab so the motion can be judged without a
-live chat: serve the repository over http and open it. It is not part of the extension and nothing in
-`manifest.json` references it (`python3 -m http.server 8080`, then `/dev/preview.html`).
+live chat. It is not part of the extension and nothing in `manifest.json` references it:
+
+```bash
+python3 -m http.server 8080     # then open http://localhost:8080/ (index.html forwards to the preview)
+```
+
+The preview loads the real `panel.html`, `panel.css` and `panel.js`, answers its Chrome API calls with a
+fake service worker and a fake Arena port, and then drives scripted scenarios — a plain reply, a formatted
+one, tool steps, a clarification card, a response pair, a rate limit, a staged file, imported history. The
+bar at the top replays any single scenario; the panel UI, including all motion, is the production code.
 
 ## Findings left open (deliberately)
 
