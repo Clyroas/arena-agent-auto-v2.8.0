@@ -104,6 +104,9 @@ export class AgentClient {
     this.pageKind = event.pageKind === 'direct' ? 'direct' : 'agent';
     this.model = typeof event.model === 'string' ? event.model : '';
     this.blocked = typeof event.blocked === 'string' ? event.blocked : '';
+    // Semantic capability snapshot (see core.js capabilitySummary). Absent on older adapters, in which
+    // case the panel simply reports that no capability check was sent rather than inventing one.
+    if (event.capabilities && typeof event.capabilities === 'object') this.capabilities = event.capabilities;
     if (Array.isArray(event.models) && (event.models.length || !this.models?.length)) this.models = event.models.slice(0, 400);
   }
   queryModel() { this.post({ type: 'MODEL' }); }

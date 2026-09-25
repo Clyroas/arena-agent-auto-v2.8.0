@@ -50,12 +50,21 @@ npm run test:browser
 - Clean teardown restores tab flags best-effort; browser/process crashes remain outside that guarantee.
 - Changes to native file staging should be smoke-tested on a real authorized Arena session before distributing this release.
 
-## Still open / next batches
+## Semantic capability diagnostics and drift detection
 
+Added: `agent-dom.js` exports a non-throwing `capabilities()` snapshot of which named controls the page currently exposes (composer, Send control, transcript markers, clarification cards, response pairs, task-review panel, composer file input, site upload picker). It is reported in the `READY`/`MODEL_INFO` frames, stored on `AgentClient`, and summarised by the pure `capabilitySummary()` in `core.js`.
+
+- When the snapshot is missing a control the adapter cannot work without (composer, Send control or transcript markers), the panel refuses Send with a coded, named gap and marks the connection-adapter line as drift (`#adapter-state[data-drift="true"]`). This turns an Arena markup change into an explicit "unsupported page layout" state instead of a generic failure mid-send.
+- Clarification cards, response pairs, the review panel and upload support are transient or optional for a text send. Their absence is reported in the adapter line but never blocks.
+- An absent snapshot (a diagnostic that could not run, e.g. an older adapter) is reported but never blocks: adapter identity is already guarded by the version handshake, and a missing diagnostic must not turn a working connection into a refused send.
+
+Verified by `test/capabilities.test.mjs` (the real `agent-dom.js` under jsdom, fed into the panel's summary helper), `test/core.test.mjs` and a `panel-lifecycle` case that asserts Send is blocked on a reported gap and released when the gap is optional.
+
+## Still open / next batches
 1. Extend the passing four-test Chromium suite to Direct, response pairs, clarification answers, worker suspension, screenshot permissions and extension updates; perform an authorized live-site smoke test.
 2. Obtain evidence for Arena's upload completion/error UI and add bounded per-file acknowledgement without guessing.
 3. Extract the broader session state machine and typed/validated message contracts. This release only extracts attachment ownership and tab-awake lifecycle helpers.
-4. Split/maintain Agent and Direct DOM adapters; strengthen semantic capability diagnostics and tested virtualization behavior.
+4. Split/maintain Agent and Direct DOM adapters; strengthen semantic capability diagnostics and tested virtualization behavior. *(Partial: the semantic capability/drift diagnostic is implemented — see the section above. Adapter split and virtualization remain.)*
 5. Benchmark long conversations before implementing per-scan style caches, incremental transcript indexing/rendering and a unified scan scheduler. No DOM scan speedup is claimed here.
 6. Memory-only dock/floating-window handoff (opening the floating window still asks to clear the local session).
 7. Redacted diagnostics export, conversation search/export, prompt copying and configurable shortcuts.

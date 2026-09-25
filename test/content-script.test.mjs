@@ -44,6 +44,7 @@ function open() {
     matchTurn: () => { counters.matchTurn++; return { accepted: false }; },
     fail: (code, message) => { throw new DomError(code, message); },
     inspectControls: () => ({ inputKind: 'textarea', reviewPending: false, uploadKind: 'none', fileInputCount: 0 }),
+    capabilities: () => ({ pageKind: 'agent', mode: '', checks: { composer: true, send: true, transcript: true, questions: false, responsePairs: false, reviewPanel: false, upload: false, uploadPicker: false } }),
     historyCount: () => 0
   };
   window.ArenaAgentAttachments = { ATTACHMENT_POLICY: { maxFiles: 4, maxBytes: 8 * 1024 * 1024 } };

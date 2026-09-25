@@ -21,7 +21,8 @@ The suites cover the pure helpers plus the paths that used to be untestable:
 
 | Suite | Covers |
 |-------|--------|
-| `core.test.mjs` | URL helpers (`isArena`/`isDirect`/`isDirectChat`, `directModelUrl`), `withTimeout`, `tabLabel`, `samePage` |
+| `core.test.mjs` | URL helpers (`isArena`/`isDirect`/`isDirectChat`, `directModelUrl`), `withTimeout`, `tabLabel`, `samePage`, `capabilitySummary` |
+| `capabilities.test.mjs` | The real `agent-dom.js` `capabilities()` snapshot under jsdom, fed into `capabilitySummary`: a healthy layout, a lost composer (drift), and a missing upload input (degraded, not blocking) |
 | `attachment-policy.test.mjs` | The pure file rules: count/size/MIME limits, extension↔MIME matching, edge cases |
 | `agent-client.test.mjs` | The panel client against a faked `chrome`: hang/timeout paths, teardown, the bounded worker calls |
 | `content-script.test.mjs` | The content script loaded into jsdom: connection handover (`portAlive` takeover), scan coalescing (40 mutations → 2 scans) |

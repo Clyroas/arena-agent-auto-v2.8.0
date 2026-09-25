@@ -379,6 +379,7 @@ body[data-working="true"] .arena-composer::before {
 .attachment-remove { width: 20px; height: 20px; padding: 0; border-radius: 50%; background: var(--tertiary); color: var(--surface); font-size: 13px; line-height: 20px; flex: none; }
 .attachment-help, .attachment-status { margin: 0; font-size: 11px; color: var(--secondary); }
 .attachment-status:not(:empty) { color: var(--danger-ink); }
+#adapter-state[data-drift="true"] { color: var(--danger-ink); }
 .arena-composer[data-dragging="true"] { box-shadow: 0 0 0 3px var(--accent), var(--shadow-lg); }
 .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 

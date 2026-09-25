@@ -41,6 +41,7 @@ async function open({ captureLink = async () => {}, send = async () => {} } = {}
   w.eval(`${source}\nwindow.testPanel = {
     stageFiles, clear, screenshotLink, cancelScreenshot, handleEvent, render,
     setup(connection) { state = 'ready'; client = connection; tab = { id: 1, url: AGENT_URL }; setSheet(false); render(); },
+    setCapabilities(capabilities) { client.capabilities = capabilities; render(); },
     setModel(expected, actual) { requestedModel = expected; client.model = actual; render(); },
     setTurn(turn) { turns.push(turn); pending = turn; state = 'waiting'; },
     get current() { return { staged, pending, turns, state, shotOperation, historyRequest }; }
@@ -178,5 +179,27 @@ test('model mismatch blocks Send until the user explicitly confirms the actual m
     page.w.document.getElementById('dialog-ok').click(); await tick();
     assert.equal(button.disabled, false);
     assert.equal(sends, 0, 'confirmation never sends on behalf of the user');
+  } finally { page.close(); }
+});
+
+test('a page that no longer exposes the composer blocks Send and names the gap', async () => {
+  let sends = 0;
+  const page = await open({ send: async () => { sends++; } });
+  try {
+    // No snapshot: the connection was verified against the same adapter version, so Send stays usable.
+    assert.equal(page.w.document.getElementById('prepare').disabled, false);
+    // A reported snapshot that is missing a control the adapter drives is drift: Send is refused with a
+    // named gap instead of failing later, mid-send.
+    page.ui.setCapabilities({ pageKind: 'agent', mode: '', checks: { composer: false, send: false, transcript: true, questions: false, responsePairs: false, reviewPanel: false, upload: false, uploadPicker: false } });
+    const button = page.w.document.getElementById('prepare');
+    assert.equal(button.disabled, true);
+    page.w.document.getElementById('prompt').value = 'hello';
+    button.click(); assert.equal(sends, 0);
+    assert.match(page.w.document.getElementById('adapter-state').textContent, /missing: message box, Send control/);
+    assert.equal(page.w.document.getElementById('adapter-state').dataset.drift, 'true');
+    // An optional capability going away (here: the task-review panel) is reported, not blocking.
+    page.ui.setCapabilities({ pageKind: 'agent', mode: '', checks: { composer: true, send: true, transcript: true, questions: true, responsePairs: true, reviewPanel: false, upload: true, uploadPicker: true } });
+    assert.equal(button.disabled, false);
+    assert.equal(page.w.document.getElementById('adapter-state').dataset.drift, 'false');
   } finally { page.close(); }
 });
