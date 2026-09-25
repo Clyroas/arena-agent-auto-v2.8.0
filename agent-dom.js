@@ -451,6 +451,8 @@
     if (!A) fail('ADAPTER_ERROR', 'The attachment policy is unavailable. Nothing was inserted or sent.');
     const checked = A.validateAttachments(pairs);
     if (checked.rejected.length || checked.accepted.length !== pairs.length) fail('INVALID_ATTACHMENT', checked.rejected[0]?.reason || 'One of the files is not supported. Nothing was inserted or sent.');
+    if (checked.accepted.some(file => !A.acceptsFile(target.accept, file)))
+      fail('UPLOAD_TYPE_UNSUPPORTED', 'One of the staged files does not match Arena’s file input. Nothing was inserted or sent.');
     if (pairs.length > 1 && !target.multiple) fail('UPLOAD_MULTIPLE_UNSUPPORTED', `That Arena file input accepts one file at a time. Send ${pairs.length} files separately in the Arena tab; nothing was inserted or sent.`);
     const token = crypto.randomUUID();
     target.setAttribute('data-arena-agent-stage', token);
@@ -980,7 +982,7 @@
     try { return rows(doc).filter(row => row.user).length; } catch { return 0; }
   }
 
-  globalThis.ArenaAgentDOM = { version: '2.8.1', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
+  globalThis.ArenaAgentDOM = { version: '2.8.2', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
     richOf, userRowText, userRowMatches, composer, sendButton, enabled, reviewPanel, conversationReady, inspectControls, preflight, matchTurn, questionsFor, toolActivity, thinkingStatus, historyTurns, historyCount, answerText, normalize, composerText, writeComposer, composerSummary, fileInputsFor, composerFileInputs, uploadsFor, stageRequestFor, nearComposer, promptMatches,
     pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide };
 })();

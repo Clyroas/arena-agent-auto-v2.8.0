@@ -42,7 +42,7 @@ for (const target of [AGENT_URL, directModelUrl('test-model')]) {
     assert.equal((await navigate(target)).ok, true);
     assert.deepEqual(calls, [
       ['window', 7, { focused: true }],
-      ['tab', 42, { url: target, active: true, autoDiscardable: false }]
+      ['tab', 42, { url: target, active: true }]
     ]);
   });
 }

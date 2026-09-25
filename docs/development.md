@@ -12,7 +12,7 @@ and dev-only.
 | Script | Does |
 |--------|------|
 | `npm run lint` | ESLint (flat config in `eslint.config.mjs`) |
-| `npm test` | `node --test "test/**/*.test.mjs"` — 98 tests |
+| `npm test` | `node --test "test/**/*.test.mjs"` — Node/jsdom tests |
 | `npm run check` | Both, in that order — what CI runs |
 
 ## Tests
@@ -90,3 +90,17 @@ every pull request, and on demand. Lint catches the mistakes that break the pane
   hatch. See the motion table in [STABILITY-REVIEW.md](../STABILITY-REVIEW.md).
 - **Storage is appearance-only.** Anything that smells like chat content, credentials, or telemetry
   does not get persisted — see the table in [architecture.md](architecture.md).
+
+## Browser regressions and release artifacts (2.8.2)
+
+```bash
+npx playwright install --with-deps chromium
+npm run test:browser
+npm run package:extension
+```
+
+`test/browser/extension.spec.mjs` loads the real unpacked extension in a persistent Chromium context. All ordinary web requests are intercepted; `test/browser/fixtures/agent.html` is synthetic, not a private conversation or a claim about current Arena markup. The browser job runs separately from Node tests in CI. The implementation sandbox could discover these tests but could not launch Chromium; see [implementation status](IMPLEMENTATION-STATUS.md).
+
+`extension-files.json` is the reviewed release allow-list. Update it for new runtime modules/assets. Node tests verify packaged import/style/markup dependencies and panel/floating control parity. `npm run package:extension` writes `dist/arena-auto-chat-<version>/`, which can be loaded unpacked or zipped for distribution. Never include `node_modules`, tests, traces, `.git`, or development previews in the artifact.
+
+The version checklist also includes `attachment-policy.js`'s registration `VERSION`; changing its implementation without a version bump can leave an old registration in an already-open tab.

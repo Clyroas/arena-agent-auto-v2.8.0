@@ -22,7 +22,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   pruneGrants();
   const key = `${tabId}:${documentId}`;
   if (!stageGrants.has(key)) return deny('STAGE_UNBOUND', 'No pending staged-file send is attached to this Arena document. Nothing was inserted.');
+  const grantExpiry = stageGrants.get(key);
   stageGrants.delete(key); // single use: another attempt needs a fresh explicit Send
+  if (!Number.isFinite(message.expiresAt) || message.expiresAt <= Date.now())
+    return deny('STAGE_EXPIRED', 'The staged-file request expired. Nothing was inserted.');
+  const expiresAt = Math.min(message.expiresAt, grantExpiry);
   const files = Array.isArray(message.files) ? message.files : [];
   if (!files.length || files.length > 4 || files.some(file => typeof file?.name !== 'string' || typeof file?.type !== 'string' ||
       typeof file?.data !== 'string' || file.data.length > 12e6) || !/^[0-9a-f-]{36}$/.test(String(message.token || '')))
@@ -30,7 +34,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   (async () => {
     const results = await chrome.scripting.executeScript({
       target: { tabId, documentIds: [documentId] }, world: 'MAIN',
-      func: arenaAgentStageFiles, args: [{ token: message.token, files }]
+      func: arenaAgentStageFiles, args: [{ token: message.token, expiresAt, files }]
     });
     return { ok: true, value: results?.find(entry => entry.frameId === 0)?.result ?? null };
   })().then(result => respond(result), error => respond({ ok: false, code: 'STAGE_FAILED', error: error?.message || 'Chrome could not run the staging step. Nothing was inserted.' }));
@@ -112,7 +116,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         // Foreground only this explicit switch: background pages can defer hydration until
         // visible, leaving the panel stuck checking controls until the user clicks the tab.
         await chrome.windows.update(tab.windowId, { focused: true, ...(wasMinimized ? { state: 'normal' } : {}) });
-        await chrome.tabs.update(tab.id, { url: target, active: true, autoDiscardable: false });
+        await chrome.tabs.update(tab.id, { url: target, active: true });
         return {
           windowId: tab.windowId,
           wasMinimized,

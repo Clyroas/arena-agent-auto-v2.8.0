@@ -1,12 +1,12 @@
 import { isArena, samePage } from './core.js';
-export const ADAPTER_VERSION = '2.8.1';
+export const ADAPTER_VERSION = '2.8.2';
 export class AttachmentError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 export async function attachAgent(tabId, expectedUrl) {
   if (!Number.isInteger(tabId)) throw new AttachmentError('INVALID_TAB', 'Choose an Arena tab first.');
   if (!chrome.scripting?.executeScript)
-    throw new AttachmentError('EXTENSION_UPDATE_REQUIRED', 'The scripting API is unavailable. Reload Arena Auto Chat in chrome://extensions and confirm version 2.8.1 with the scripting permission.');
+    throw new AttachmentError('EXTENSION_UPDATE_REQUIRED', 'The scripting API is unavailable. Reload Arena Auto Chat in chrome://extensions and confirm version 2.8.2 with the scripting permission.');
   if (!await chrome.permissions.contains({ origins: ['https://arena.ai/*'] }))
     throw new AttachmentError('SITE_ACCESS_REQUIRED', 'Chrome has not granted Arena site access. Open chrome://extensions → Arena Auto Chat → Details → Site access and allow https://arena.ai, then reconnect. Do not grant access to all sites.');
   const before = await chrome.tabs.get(tabId);
@@ -34,14 +34,15 @@ export async function attachAgent(tabId, expectedUrl) {
       func: () => ({
         version: globalThis.__ARENA_AGENT_REGISTRATION__?.version || null,
         domVersion: globalThis.ArenaAgentDOM?.version || null,
-        attachmentsPolicy: !!globalThis.ArenaAgentAttachments
+        attachmentsPolicy: !!globalThis.ArenaAgentAttachments,
+        attachmentsVersion: globalThis.ArenaAgentAttachments?.version || null
       })
     });
   } catch (error) {
     throw new AttachmentError('DOCUMENT_CHANGED', `The Arena document became unavailable during attachment. Browser detail: ${error.message || 'document changed'}. Wait for it to finish loading and reconnect; no prompt was sent.`);
   }
-  if (checks?.[0]?.result?.version !== ADAPTER_VERSION || checks?.[0]?.result?.domVersion !== ADAPTER_VERSION || checks?.[0]?.result?.attachmentsPolicy !== true)
-    throw new AttachmentError('SCRIPT_REGISTRATION_FAILED', 'The bundled Agent script did not register version 2.8.1. Reload the extension and tab. This is an extension attachment problem, not an Arena reply timeout. No prompt was sent.');
+  if (checks?.[0]?.result?.version !== ADAPTER_VERSION || checks?.[0]?.result?.domVersion !== ADAPTER_VERSION || checks?.[0]?.result?.attachmentsPolicy !== true || checks?.[0]?.result?.attachmentsVersion !== ADAPTER_VERSION)
+    throw new AttachmentError('SCRIPT_REGISTRATION_FAILED', 'The bundled Agent script did not register version 2.8.2. Reload the extension and tab. This is an extension attachment problem, not an Arena reply timeout. No prompt was sent.');
   const after = await chrome.tabs.get(tabId);
   if (!samePage(after.url, before.url) || !isArena(after.url))
     throw new AttachmentError('TAB_NAVIGATED', 'Arena navigated during connection. Reconnect to the current Agent conversation; no prompt was sent.');

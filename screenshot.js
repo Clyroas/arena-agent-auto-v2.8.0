@@ -9,6 +9,9 @@ export const SHOT = Object.freeze({
   width: 1280, height: 900,          // popup window size (CSS px, roughly a laptop browser window)
   maxCssHeight: 15000,               // full-page cap; longer pages are cut off and marked as truncated
   maxCanvas: 16000,                  // max stitched bitmap height/width in device pixels
+  maxPixels: 20000000,             // 80 MB RGBA canvas budget, independent of aspect ratio
+  maxSlicePixels: 32000000,        // reject unexpectedly huge individual captures
+  maxCaptureChars: 64 * 1024 * 1024, // aggregate encoded screenshot budget
   maxParts: 24,                      // hard cap on captures per page
   loadTimeoutMs: 30000, settleMs: 1200,
   stepMs: 600,                       // Chrome allows about 2 captureVisibleTab calls per second
@@ -76,18 +79,29 @@ export const requestShotAccess = (api = chrome) => api.permissions.request({ ori
 export const removeShotAccess = (api = chrome) => api.permissions.remove({ origins: [...SHOT_ORIGINS] }).catch(() => false);
 
 // ---------- capture ----------
-const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms); });
+function checkAbort(signal) { if (signal?.aborted) throw shotError('CANCELLED', 'Screenshot cancelled.'); }
+function abortable(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(shotError('CANCELLED', 'Screenshot cancelled.'));
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    if (signal.aborted) abort();
+  });
+}
+const sleep = (ms, signal) => abortable(new Promise(resolve => { setTimeout(resolve, ms); }), signal);
 // Chrome throttles captureVisibleTab to about two calls per second, and a full-page capture needs up to
 // SHOT.maxParts of them. One quota rejection used to abort the whole run and throw away the slices
 // already taken, so a rate-limited call is retried a few times with a growing pause first.
 export const CAPTURE_RETRY_LIMIT = 4;
 export const RATE_LIMITED = /max_capture_visible_tab_calls_per_second|too many.{0,40}capture|capture.{0,40}(?:rate|quota)|rate limit/i;
-export async function captureSlice(api, windowId, { attempts = CAPTURE_RETRY_LIMIT, wait = sleep } = {}) {
+export async function captureSlice(api, windowId, { attempts = CAPTURE_RETRY_LIMIT, wait = sleep, signal } = {}) {
   for (let attempt = 0; ; attempt++) {
-    try { return await api.tabs.captureVisibleTab(windowId, { format: 'png' }); }
+    checkAbort(signal);
+    try { return await abortable(withTimeout(api.tabs.captureVisibleTab(windowId, { format: 'png' }), SHOT.scriptTimeoutMs, 'CAPTURE_TIMEOUT', 'Chrome did not return the screenshot in time.'), signal); }
     catch (error) {
       if (attempt >= attempts - 1 || !RATE_LIMITED.test(String(error?.message || error || ''))) throw error;
-      await wait(350 * (attempt + 1));
+      await wait(350 * (attempt + 1), signal);
     }
   }
 }
@@ -97,11 +111,16 @@ function withTimeout(promise, ms, code, message) {
     .finally(() => clearTimeout(timer));
 }
 const LOAD_FAILED = 'The page could not be loaded (offline, blocked or not a web page). Nothing was attached.';
-async function run(api, tabId, func, args = []) {
+async function run(api, tabId, func, args = [], context = {}) {
   try {
-    const [first] = await withTimeout(api.scripting.executeScript({ target: { tabId }, func, args }), SHOT.scriptTimeoutMs,
-      'PAGE_NOT_RESPONDING', 'The page stopped responding (for example a pop-up dialog). Nothing was attached.');
-    return first?.result;
+    checkAbort(context.signal);
+    const target = context.documentId ? { tabId, documentIds: [context.documentId] } : { tabId, frameIds: [0] };
+    const [first] = await abortable(withTimeout(api.scripting.executeScript({ target, func, args }), SHOT.scriptTimeoutMs,
+      'PAGE_NOT_RESPONDING', 'The page stopped responding (for example a pop-up dialog). Nothing was attached.'), context.signal);
+    if (!first?.documentId || (context.documentId && context.documentId !== first.documentId))
+      throw shotError('PAGE_CHANGED', 'The screenshot document changed. Nothing was attached.');
+    context.documentId = first.documentId;
+    return first.result;
   } catch (error) {
     if (error?.code) throw error;
     // Chrome shows its own error page for unreachable sites; scripts cannot run there.
@@ -114,21 +133,21 @@ async function waitLoaded(api, tabId, signal) {
   const deadline = Date.now() + SHOT.loadTimeoutMs;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw shotError('CANCELLED', 'Screenshot cancelled.');
-    const tab = await api.tabs.get(tabId).catch(() => null);
+    const tab = await abortable(api.tabs.get(tabId).catch(() => null), signal);
     if (!tab) throw shotError('WINDOW_CLOSED', 'The screenshot window was closed before the page loaded.');
     if (tab.status === 'complete') return tab;
-    await sleep(250);
+    await sleep(250, signal);
   }
   return api.tabs.get(tabId); // slow page: capture what has rendered after 30 s
 }
 // In-page helpers (serialized into the page by chrome.scripting; must be self-contained).
 function pageMetrics() {
   const el = document.scrollingElement || document.documentElement;
-  return { height: Math.max(el.scrollHeight, document.body?.scrollHeight || 0), view: innerHeight, width: innerWidth, title: document.title.slice(0, 200) };
+  return { height: Math.max(el.scrollHeight, document.body?.scrollHeight || 0), view: innerHeight, width: innerWidth, title: document.title.slice(0, 200), href: location.href };
 }
 function pageScroll(y) {
   (document.scrollingElement || document.documentElement).scrollTop = y; scrollTo(0, y);
-  return new Promise(resolve => { requestAnimationFrame(() => requestAnimationFrame(() => resolve(scrollY))); });
+  return new Promise(resolve => { requestAnimationFrame(() => requestAnimationFrame(() => resolve({ y: scrollY, view: innerHeight, width: innerWidth, href: location.href }))); });
 }
 // After the first frame, fixed/sticky bars (headers, cookie banners) would repeat in every slice.
 function pageHideFixed() {
@@ -147,67 +166,123 @@ function pageHideFixed() {
 export async function captureLink(href, { api = chrome, onProgress = () => {}, signal } = {}) {
   const url = safeLink(href);
   if (!url) throw shotError('INVALID_LINK', 'Only http(s) links without embedded passwords can be captured.');
-  if (!await hasShotAccess(api)) throw shotError('NO_ACCESS', 'Website access for screenshots is not granted.');
-  const previous = await api.windows.getLastFocused().catch(() => null);
+  checkAbort(signal);
+  if (!await abortable(hasShotAccess(api), signal)) throw shotError('NO_ACCESS', 'Website access for screenshots is not granted.');
+  const previous = await abortable(api.windows.getLastFocused().catch(() => null), signal);
+  checkAbort(signal);
   onProgress({ phase: 'opening' });
+  // A Chrome window creation cannot be cancelled. If it resolves after cancellation, the finally below
+  // still closes that exact window; no late result is attached to the draft.
   const win = await api.windows.create({ url, type: 'popup', width: SHOT.width, height: SHOT.height, focused: true });
   const windowId = win.id, tabId = win.tabs?.[0]?.id;
-  const captures = [];
-  let metrics;
+  const captures = [], context = { signal };
+  let metrics, finalUrl, encodedChars = 0;
+  let closePromise = null;
+  const closeWindow = () => closePromise ||= api.windows.remove(windowId).catch(() => {});
+  const onAbort = () => { void closeWindow(); };
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
+    checkAbort(signal);
     if (tabId == null) throw shotError('CAPTURE_FAILED', 'Chrome did not open the screenshot window.');
     onProgress({ phase: 'loading' });
-    const tab = await waitLoaded(api, tabId, signal);
-    if (!/^https?:/.test(tab.url || '')) throw shotError('PAGE_LOAD_FAILED', LOAD_FAILED);
-    await sleep(SHOT.settleMs);
-    metrics = await run(api, tabId, pageMetrics);
-    if (!metrics?.view || !metrics?.width) throw shotError('CAPTURE_FAILED', 'The page has no visible area to capture.');
+    await waitLoaded(api, tabId, signal);
+    await sleep(SHOT.settleMs, signal);
+    metrics = await run(api, tabId, pageMetrics, [], context);
+    finalUrl = safeLink(metrics?.href);
+    if (!finalUrl) throw shotError('PAGE_LOAD_FAILED', LOAD_FAILED);
+    if (!Number.isFinite(metrics.view) || !Number.isFinite(metrics.width) || !Number.isFinite(metrics.height) || metrics.view <= 0 || metrics.width <= 0)
+      throw shotError('CAPTURE_FAILED', 'The page has no visible area to capture.');
+    const unchanged = position => {
+      if (position.href !== metrics.href || position.width !== metrics.width || position.view !== metrics.view)
+        throw shotError('PAGE_CHANGED', 'The page navigated or its viewport changed during capture. Nothing was attached.');
+    };
+    const verifyTab = async () => {
+      const tab = await abortable(api.tabs.get(tabId), signal);
+      if (!tab.active || tab.windowId !== windowId || tab.url !== metrics.href || tab.status === 'loading')
+        throw shotError('PAGE_CHANGED', 'The screenshot tab changed during capture. Nothing was attached.');
+      unchanged(await run(api, tabId, pageMetrics, [], context));
+    };
     const steps = planSteps(metrics.height, metrics.view);
     let lastY = -1, lastShot = 0;
     for (let i = 0; i < steps.length; i++) {
-      if (signal?.aborted) throw shotError('CANCELLED', 'Screenshot cancelled.');
+      checkAbort(signal);
       onProgress({ phase: 'capturing', part: i + 1, parts: steps.length });
-      const y = await run(api, tabId, pageScroll, [steps[i]]);
-      if (i > 0 && y <= lastY) break; // the page stopped scrolling (inner scroll area or shorter than reported)
-      if (i === 1) await run(api, tabId, pageHideFixed);
-      const wait = Math.max(0, SHOT.stepMs - (Date.now() - lastShot));
-      await sleep(i === 0 ? 150 : wait);
+      const position = await run(api, tabId, pageScroll, [steps[i]], context);
+      unchanged(position);
+      const y = position.y;
+      if (!Number.isFinite(y) || y < 0) throw shotError('CAPTURE_FAILED', 'The page returned an invalid scroll position.');
+      if (i > 0 && y <= lastY) break;
+      if (i === 1) await run(api, tabId, pageHideFixed, [], context);
+      await sleep(i === 0 ? 150 : Math.max(0, SHOT.stepMs - (Date.now() - lastShot)), signal);
+      await verifyTab();
       let dataUrl;
-      try { dataUrl = await captureSlice(api, windowId); }
+      try { dataUrl = await captureSlice(api, windowId, { signal }); }
       catch (error) {
-        // The window is closed by the caller's finally block either way; nothing half-captured is kept.
-        throw shotError('CAPTURE_FAILED', `Chrome did not return a screenshot of part ${i + 1} of ${steps.length} (${String(error?.message || 'unknown error').slice(0, 160)}). Nothing was attached.`);
+        if (error.code) throw error;
+        throw shotError('CAPTURE_FAILED', `Chrome did not return screenshot part ${i + 1}. Nothing was attached.`);
       }
+      await verifyTab(); // discard, rather than label, any slice captured across navigation
+      encodedChars += dataUrl.length;
+      if (encodedChars > SHOT.maxCaptureChars) throw shotError('TOO_LARGE', 'The screenshot exceeded its memory budget. Nothing was attached.');
       lastShot = Date.now(); lastY = y;
       captures.push({ y, dataUrl });
     }
   } finally {
-    await api.windows.remove(windowId).catch(() => {});
-    if (previous?.id != null) api.windows.update(previous.id, { focused: true }).catch(() => {});
+    signal?.removeEventListener('abort', onAbort);
+    const focused = await api.windows.getLastFocused().catch(() => null);
+    await closeWindow();
+    // Never pull the user back from a window they deliberately focused while capture was running.
+    if (focused?.id === windowId && previous?.id != null) await api.windows.update(previous.id, { focused: true }).catch(() => {});
   }
+  checkAbort(signal);
   if (!captures.length) throw shotError('CAPTURE_FAILED', 'Nothing could be captured from the page.');
   onProgress({ phase: 'stitching' });
-  const bitmaps = await Promise.all(captures.map(item => createImageBitmap(dataUrlToBlob(item.dataUrl))));
-  try {
-    const scale = bitmaps[0].width / metrics.width; // device pixels per CSS px
-    const last = captures.at(-1);
-    const cssHeight = Math.min(last.y + metrics.view, SHOT.maxCssHeight);
-    const truncated = metrics.height > cssHeight + 2;
-    let fit = Math.min(1, SHOT.maxCanvas / (cssHeight * scale), SHOT.maxCanvas / bitmaps[0].width);
-    for (;;) {
-      const width = Math.max(1, Math.round(bitmaps[0].width * fit)), height = Math.max(1, Math.round(cssHeight * scale * fit));
-      const canvas = new OffscreenCanvas(width, height), ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height);
-      captures.forEach((item, i) => ctx.drawImage(bitmaps[i], 0, Math.round(item.y * scale * fit), width, Math.round(bitmaps[i].height * fit)));
-      let blob = await canvas.convertToBlob({ type: 'image/png' });
-      let name = shotName(url);
-      if (blob.size > SHOT.maxBytes) { blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }); name = name.replace(/\.png$/, '.jpg'); }
-      if (blob.size <= SHOT.maxBytes || fit < 0.3) {
-        if (blob.size > SHOT.maxBytes) throw shotError('TOO_LARGE', 'The screenshot is larger than 8 MB even after shrinking. Nothing was attached.');
-        const file = new File([blob], name, { type: blob.type });
-        return { file, title: metrics.title || '', truncated, parts: captures.length, width, height, url };
+  return stitchCaptures(captures, metrics, finalUrl, { signal });
+}
+
+// Decode only one slice at a time and close it even if drawing/encoding fails. Exported for budget and
+// cancellation tests; browser APIs remain injectable dev-only dependencies, not runtime libraries.
+export async function stitchCaptures(captures, metrics, url, {
+  signal, decode = createImageBitmap, makeCanvas = (w, h) => new OffscreenCanvas(w, h)
+} = {}) {
+  const cssHeight = Math.min(captures.at(-1).y + metrics.view, SHOT.maxCssHeight);
+  let fit = 1, scale = 1, sourceWidth = 0;
+  for (;;) {
+    checkAbort(signal);
+    let canvas;
+    try {
+      for (const [index, item] of captures.entries()) {
+        checkAbort(signal);
+        const bitmap = await decode(dataUrlToBlob(item.dataUrl));
+        try {
+          checkAbort(signal);
+          if (!bitmap.width || !bitmap.height || bitmap.width * bitmap.height > SHOT.maxSlicePixels)
+            throw shotError('TOO_LARGE', 'A screenshot slice exceeded its pixel budget. Nothing was attached.');
+          if (index === 0) {
+            sourceWidth = bitmap.width; scale = sourceWidth / metrics.width;
+            fit = Math.min(fit, SHOT.maxCanvas / (cssHeight * scale), SHOT.maxCanvas / sourceWidth,
+              Math.sqrt(SHOT.maxPixels / (sourceWidth * cssHeight * scale)));
+            canvas = makeCanvas(Math.max(1, Math.floor(sourceWidth * fit)), Math.max(1, Math.floor(cssHeight * scale * fit)));
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw shotError('CAPTURE_FAILED', 'The screenshot canvas could not be allocated.');
+            ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+          } else if (bitmap.width !== sourceWidth) throw shotError('PAGE_CHANGED', 'The screenshot resolution changed between slices.');
+          canvas.getContext('2d').drawImage(bitmap, 0, Math.round(item.y * scale * fit), canvas.width, Math.round(bitmap.height * fit));
+        } finally { bitmap.close?.(); }
       }
+      checkAbort(signal);
+      let blob = await canvas.convertToBlob({ type: 'image/png' }), name = shotName(url);
+      checkAbort(signal);
+      if (blob.size > SHOT.maxBytes) {
+        blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }); name = name.replace(/\.png$/, '.jpg');
+        checkAbort(signal);
+      }
+      if (blob.size <= SHOT.maxBytes) return {
+        file: new File([blob], name, { type: blob.type }), title: metrics.title || '',
+        truncated: metrics.height > cssHeight + 2, parts: captures.length, width: canvas.width, height: canvas.height, url
+      };
+      if (fit < 0.3) throw shotError('TOO_LARGE', 'The screenshot is larger than 8 MB even after shrinking. Nothing was attached.');
       fit *= 0.75;
-    }
-  } finally { bitmaps.forEach(bitmap => bitmap.close?.()); }
+    } finally { if (canvas) { canvas.width = 1; canvas.height = 1; } }
+  }
 }
