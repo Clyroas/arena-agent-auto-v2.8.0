@@ -6,7 +6,8 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 30000,
-  reporter: 'list',
+  // GitHub annotations keep assertion details available even when log/artifact storage is unreachable.
+  reporter: [['list'], ['github']],
   outputDir: 'test-results',
   use: { trace: 'retain-on-failure' }
 });

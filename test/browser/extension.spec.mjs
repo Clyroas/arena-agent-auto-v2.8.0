@@ -66,7 +66,9 @@ test('real panel → worker → main-world staging preserves equal-metadata file
 });
 
 test('an expired main-world staging request cannot insert bytes', async () => {
-  const result = await worker.evaluate(async tabId => {
+  // Dynamic import is supported in extension pages, not ServiceWorkerGlobalScope. Import the
+  // packaged helper here and still run the actual serialized function in the tab's MAIN world.
+  const result = await panel.evaluate(async tabId => {
     const token = crypto.randomUUID();
     await chrome.scripting.executeScript({ target: { tabId }, world: 'ISOLATED', func: token => document.getElementById('files').setAttribute('data-arena-agent-stage', token), args: [token] });
     const { arenaAgentStageFiles } = await import(chrome.runtime.getURL('stage-main.js'));
