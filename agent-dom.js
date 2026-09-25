@@ -232,6 +232,18 @@
     }
     return '';
   }
+  // A security verification can clear while Arena is re-mounting the transcript: the row list is briefly
+  // empty, which the exact-prefix check in matchTurn sees as an unrelated-conversation change. The
+  // accepted message ID is a stronger anchor than the row list, so rebuild the baseline as the rows
+  // before it and let matchTurn re-verify the row and prompt as usual (the same anchor watch() trusts).
+  // Returns false when that anchor is gone, so a genuinely different conversation still stops.
+  function reanchor(tx, doc = document) {
+    if (!tx?.userId) return false;
+    const list = rows(doc), index = list.findIndex(row => row.id === tx.userId && row.user);
+    if (index < 0) return false;
+    tx.baseline = list.slice(0, index).map(row => row.id);
+    return true;
+  }
   // Check UI notices, not chat text. Never copy these notices into a reply.
   function checkBlocks(doc = document) {
     refreshRows(doc);
@@ -1030,7 +1042,7 @@
     try { return rows(doc).filter(row => row.user).length; } catch { return 0; }
   }
 
-  globalThis.ArenaAgentDOM = { version: '2.8.2', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
+  globalThis.ArenaAgentDOM = { version: '2.8.3', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
     richOf, userRowText, userRowMatches, composer, sendButton, enabled, reviewPanel, conversationReady, inspectControls, preflight, matchTurn, questionsFor, toolActivity, thinkingStatus, historyTurns, historyCount, answerText, normalize, composerText, writeComposer, composerSummary, fileInputsFor, composerFileInputs, uploadsFor, stageRequestFor, nearComposer, promptMatches,
-    pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide, capabilities, securityNotice };
+    pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide, capabilities, securityNotice, reanchor };
 })();

@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '2.8.2';
+  const VERSION = '2.8.3';
   const runtime = chrome.runtime;
   const previous = globalThis.__ARENA_AGENT_REGISTRATION__;
   if (previous?.version === VERSION && previous.isAlive?.()) return;
@@ -13,7 +13,7 @@
   const LEASE_MS = 5 * 60 * 1000;
   const consumed = new Set();
   const documentId = crypto.randomUUID();
-  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.8.2' }); } catch { cleanup(); } }
+  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.8.3' }); } catch { cleanup(); } }
   const STAGE_TIMEOUT_MS = 10000;
   function clearStaging(tx) {
     if (!tx) return;
@@ -223,6 +223,9 @@
     }
   }
   const DIRECT_SETTLE_MS = 5000, PAIR_SETTLE_MS = 30000, PROMPT_SETTLE_MS = 8000;
+  // A verification clears through a transcript re-mount on Agent pages too (not just Direct), so the same
+  // settle idea is allowed there for a bounded window, anchored on the accepted message ID.
+  const SECURITY_SETTLE_MS = 8000;
   // Battles in Direct: the user asked the panel to continue with Response A or B. One click on Arena's
   // own "Continue with A/B" button, only when Arena has enabled it; never automatic, never retried.
   function chooseResponse(message) {
@@ -286,6 +289,10 @@
       // resume path uses Infinity as "no deadline", which must stay Infinity.
       if (typeof tx.ackDeadline === 'number' && Number.isFinite(tx.ackDeadline)) tx.ackDeadline += Date.now() - (tx.securityHoldSince || Date.now());
       tx.securityHoldSince = 0;
+      // Mark the resume. Arena frequently re-mounts the transcript as the interstitial disappears, so the
+      // next scans can briefly see zero rows; scan() allows a bounded settle for that, anchored on the
+      // accepted message ID, rather than treating the remount as an unrelated conversation.
+      tx.securityClearedAt = Date.now();
       emit({ type: 'SECURITY_CLEARED', requestId: tx.requestId, clicked: !!tx.clicked, accepted: !!tx.userId });
     }
     return false;
@@ -321,22 +328,36 @@
       if (holdForSecurity(tx)) return;
       D.checkBlocks();
       let result;
-      try { result = D.matchTurn(tx); tx.unclearSince = 0; }
-      catch (e) {
+      try { result = D.matchTurn(tx); tx.unclearSince = 0; tx.securityClearedAt = 0; }
+      catch (caught) {
         // Direct pages re-render while Arena moves a new chat to /c/<id>; a momentary odd row layout
         // is not a reason to stop. Nothing is captured while unclear; if it persists, fail as before.
         // The same applies when Arena redraws the reply area (for example after a response pair's
         // choice or Skip, which can wait on Arena's server): rows may vanish briefly and come back.
         // Arena can also switch a response pair between layouts; two replies seen for a moment is not final.
         // A new chat may draw the user's message before its text (fade-in / late fill): give it a moment.
-        const grace = e?.code === 'PROMPT_MISMATCH' ? PROMPT_SETTLE_MS
-          : ['AMBIGUOUS_TURN', 'CONVERSATION_CHANGED', 'AMBIGUOUS_REPLY'].includes(e?.code) && D.pageKind() === 'direct'
-            ? (tx.pairChoice ? PAIR_SETTLE_MS : DIRECT_SETTLE_MS) : 0;
-        if (grace) {
-          tx.unclearSince ||= Date.now();
-          if (Date.now() - tx.unclearSince < grace) { tx.completedText = ''; tx.completeAt = 0; return; }
+        // A security verification clears through a transcript re-mount (rows briefly gone / reordered).
+        // The accepted message ID survives that, so re-anchor on it and retry once before giving up.
+        let e = caught, settled = false;
+        if (['CONVERSATION_CHANGED', 'AMBIGUOUS_TURN', 'AMBIGUOUS_REPLY'].includes(e?.code) &&
+            Date.now() - (tx.securityClearedAt || 0) < SECURITY_SETTLE_MS) {
+          if (D.reanchor?.(tx)) {
+            try { result = D.matchTurn(tx); tx.unclearSince = 0; tx.securityClearedAt = 0; settled = true; }
+            catch (retry) { e = retry; }
+          }
+          // Still re-mounting: wait quietly and never capture from a partial transcript.
+          if (!settled && Date.now() - tx.securityClearedAt < SECURITY_SETTLE_MS) { tx.completedText = ''; tx.completeAt = 0; return; }
         }
-        throw e;
+        if (!settled) {
+          const grace = e?.code === 'PROMPT_MISMATCH' ? PROMPT_SETTLE_MS
+            : ['AMBIGUOUS_TURN', 'CONVERSATION_CHANGED', 'AMBIGUOUS_REPLY'].includes(e?.code) && D.pageKind() === 'direct'
+              ? (tx.pairChoice ? PAIR_SETTLE_MS : DIRECT_SETTLE_MS) : 0;
+          if (grace) {
+            tx.unclearSince ||= Date.now();
+            if (Date.now() - tx.unclearSince < grace) { tx.completedText = ''; tx.completeAt = 0; return; }
+          }
+          throw e;
+        }
       }
       checkUrl(tx, result);
       // Remember what the two responses said, so a later redraw can tell the chosen one from the other.

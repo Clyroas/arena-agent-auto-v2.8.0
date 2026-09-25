@@ -1,4 +1,4 @@
-# Improvement implementation status — 2.8.2
+# Improvement implementation status — 2.8.3
 
 Updated 2026-09-25. Tracks the first implementation batch from [IMPROVEMENT-REVIEW.md](IMPROVEMENT-REVIEW.md).
 
@@ -19,6 +19,7 @@ This is a correctness/recovery release, **not completion of the entire roadmap a
 | Attachment eligibility | Per-file target accept checking, case-insensitive extensions/MIME aliases, supported image/text wildcards, and exact decoded size validation at 8 MiB. Independent validation in the serialized main-world helper. | Boundary, type restriction and atomic rejection tests. |
 | Silent transport | After 90 seconds without an inbound frame, report a nonresponsive tab and pause new sends without terminating generation or resending. Any inbound frame clears that transport warning. | Client heartbeat-health tests. |
 | Security-verification pause/resume | A visible captcha / "verify you are human" interstitial now pauses an in-flight turn instead of stopping it: `agent-dom.js` exposes a non-throwing `securityNotice()` alongside the fatal `checkBlocks()`, `agent-content.js` holds the turn and emits `BLOCKED`/`SECURITY_CLEARED`, and the panel shows a distinct paused status. The connect handshake waits through the notice (bounded) rather than failing, so the panel learns when the site passed verification. A pre-Send notice is waited out on a 2-minute budget; other blocks (rate limit, sign-in, Arena error) stay fatal. | Adapter `securityNotice()` tests against real `agent-dom.js` under jsdom; content-script pause/resume, handshake-wait and hard-stop tests; `live-status` and real-panel `BLOCKED`/`SECURITY_CLEARED` tests. |
+| Post-verification resume | Clearing a verification usually re-mounts Arena’s transcript, so the first scan after it saw an empty row list and the exact-prefix guard raised `CONVERSATION_CHANGED` ("…0 row(s) on page") — stopping the turn at the moment the user had just passed the check. A bounded 8-second settle window after `SECURITY_CLEARED` now allows the loop to re-anchor on the accepted message ID via the new non-throwing `reanchor()`, then re-verify the row and prompt as usual. A remount that outlasts the window, or a page where that message ID is gone, still stops. | Content-script remount-recovery and genuine-change hard-stop tests; `reanchor()` tests against real `agent-dom.js` under jsdom (anchoring, missing ID, ID belonging to an assistant row). |
 | Non-destructive reconnect | Explicit reattach to the same conversation preserves draft/history and only re-watches a verified accepted message. Changing conversation still requires explicit clearing/confirmation. | Panel same-conversation reconnect regression. |
 | Model verification | Requested model mismatch blocks Send until the user explicitly accepts the actual displayed model or makes another model choice. | UI and send-path guards; live model-picker smoke test remains required. |
 | Tab wake settings | Memory-only serialized lease restores the original autoDiscardable flag, including acquire/release races. Navigation no longer changes the flag outside that lease. | True/false restoration and asynchronous race tests. |
@@ -30,7 +31,7 @@ This is a correctness/recovery release, **not completion of the entire roadmap a
 ```bash
 npm ci
 npm run check                 # ESLint + Node/jsdom regressions
-npm run package:extension     # dist/arena-auto-chat-2.8.2 (load this folder unpacked)
+npm run package:extension     # dist/arena-auto-chat-2.8.3 (load this folder unpacked)
 npm run test:browser -- --list
 npx playwright install --with-deps chromium
 npm run test:browser
