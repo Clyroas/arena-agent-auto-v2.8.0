@@ -94,7 +94,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         if (!allowed) throw new Error('Only a new Arena Direct chat or Agent Mode can be opened from the panel.');
         const tab = await chrome.tabs.get(message.tabId);
         if (!isArena(tab.url)) throw new Error('This tab is no longer on Arena.');
-        await chrome.tabs.update(tab.id, { url: target });
+        // Foreground only this explicit switch: background pages can defer hydration until
+        // visible, leaving the panel stuck checking controls until the user clicks the tab.
+        const win = await chrome.windows.get(tab.windowId);
+        await chrome.windows.update(tab.windowId, { focused: true, ...(win.state === 'minimized' ? { state: 'normal' } : {}) });
+        await chrome.tabs.update(tab.id, { url: target, active: true, autoDiscardable: false });
         return true;
       }
       case 'OPEN_ARENA': {

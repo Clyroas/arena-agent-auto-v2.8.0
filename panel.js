@@ -290,7 +290,7 @@ async function switchChat(kind, name = '') {
   if (!tab || pending || busy || switching) return;
   const target = kind === 'agent' ? AGENT_URL : directModelUrl(name);
   const title = kind === 'agent' ? 'Open Agent Mode?' : name ? `New chat with ${name}?` : 'Open a new Direct chat?';
-  const body = `Your connected Arena tab will open ${kind === 'agent' ? 'Agent Mode' : name ? `a new Direct chat with “${name}” selected by Arena` : 'a new Direct chat'}. Nothing is sent. This panel’s chat view is cleared; your Arena history is unchanged.${$('prompt').value || staged.length ? ' Your draft and staged files stay here.' : ''}`;
+  const body = `Your connected Arena tab will open ${kind === 'agent' ? 'Agent Mode' : name ? `a new Direct chat with “${name}” selected by Arena` : 'a new Direct chat'}. Arena is brought to the foreground automatically so the page can load. Nothing is sent. This panel’s chat view is cleared; your Arena history is unchanged.${$('prompt').value || staged.length ? ' Your draft and staged files stay here.' : ''}`;
   $('model-dialog').close();
   if (!await askConfirm(title, body, 'Open', 'Cancel')) return;
   const tabId = tab.id;
