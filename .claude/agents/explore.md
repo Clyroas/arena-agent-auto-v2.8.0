@@ -33,9 +33,26 @@ editing tools - attempting to edit files will fail.
 | Docs | `README.md`, `CHANGELOG.md`, `STABILITY-REVIEW.md`, `docs/` |
 | Dev harness (fake Chrome + fake port) | `dev/preview.html`, `dev/preview.js` |
 
-Useful anchors: `ADAPTER_VERSION`, `VERSION`, port frames (`PROBE`, `READY`, `PING`/`PONG`,
-`MODEL`/`MODEL_INFO`, `SEND`, `CANCEL`/`CANCELLED`, `ANSWER_QUESTION`, `CHOOSE_RESPONSE`,
-`LOAD_HISTORY`), worker one-shots (`ATTACH`, `STAGE_GRANT`), `RPC_TIMEOUT_MS`.
+Useful anchors (verified against the source, 2.8.2):
+
+- **Port name** — `arena-agent-content-v3` (`agent-client.js:50`, checked in `agent-content.js:498`).
+- **Panel → content script** (the only 9 accepted, `agent-content.js:518-527`): `PING`, `WATCH`,
+  `MODEL`, `PROBE`, `SEND`, `ANSWER_QUESTION`, `CHOOSE_RESPONSE`, `LOAD_HISTORY`, `CANCEL`.
+  Anything else is silently ignored.
+- **Content script → panel** (25 emitted types, `emit()` at `agent-content.js:16`): `READY`, `PONG`,
+  `WAITING`, `URL_BOUND`, `STAGE_FILES`, `STAGED`, `CLEAR_STAGE`, `SENDING`, `ACCEPTED`,
+  `SENT_WORKING`, `LIVE_UPDATE`, `COMPLETE`, `CANCELLED`, `WATCHING`, `MODEL_INFO`, `HISTORY`,
+  `HISTORY_ERROR`, `QUESTION_SENT`, `QUESTION_ERROR`, `CHOICE_SEEN`, `CHOICE_SENT`, `CHOICE_ERROR`,
+  `REVIEW_HANDLING`, `PING`, `ERROR`. Every frame is stamped with `documentId` + `adapterVersion`.
+- **Panel-synthesised events** (never on the wire — `agent-client.js` only): `TRANSPORT_HEALTH`,
+  `BRIDGE_LOST`.
+- **Worker one-shots** (`worker.js:61-145`): `OPEN_FLOATING`, `LIST_TABS`, `GET_TAB`, `FOCUS_TAB`,
+  `ATTACH`, `STAGE_GRANT`, `STAGE_REVOKE`, `NAVIGATE_TAB`, `RESTORE_TAB`, `OPEN_ARENA`.
+- **Timeouts** (`agent-client.js:8-16`): `HEARTBEAT_MS` 10 s, `ATTACH_TIMEOUT_MS` 20 s,
+  `GRANT_TIMEOUT_MS` 10 s, `HANDSHAKE_TIMEOUT_MS` 15 s, `DIALOG_TIMEOUT_MS` 120 s,
+  `SILENT_PORT_MS` 90 s; content-script `LEASE_MS` 5 min, scan tick 300 ms, `MIN_SCAN_MS` 120 ms.
+- **Error codes**: `VERSION_MISMATCH`, `ADAPTER_HANDSHAKE_TIMEOUT`, `CONNECTION_FAILED`,
+  `CONNECTION_LOST`, `TAB_IN_USE`, `PAGE_RELOADED`, `SCRIPT_REGISTRATION_FAILED`.
 
 ## Guidelines
 

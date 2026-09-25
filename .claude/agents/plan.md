@@ -29,8 +29,12 @@ plan that violates any of the following is wrong, however elegant:
 1. **No build step, no runtime dependencies.** The extension is loaded unpacked; plain ES modules
    only. ESLint and jsdom are dev-only and must never be imported by extension code.
 2. **The MV3 worker is ephemeral.** Nothing long-lived may depend on `worker.js`. The chat path is a
-   direct `chrome.tabs.connect` port from the extension page to the content script. Worker traffic
-   is one-shot and bounded (`RPC_TIMEOUT_MS` 20 s; `ATTACH` 20 s; `STAGE_GRANT` 10 s).
+   direct `chrome.tabs.connect` port (`arena-agent-content-v3`) from the extension page to the
+   content script. Worker traffic is one-shot and bounded (`RPC_TIMEOUT_MS` 20 s; `ATTACH` 20 s;
+   `STAGE_GRANT` 10 s). The worker answers ten message types — `OPEN_FLOATING`, `LIST_TABS`,
+   `GET_TAB`, `FOCUS_TAB`, `ATTACH`, `STAGE_GRANT`, `STAGE_REVOKE`, `NAVIGATE_TAB`, `RESTORE_TAB`,
+   `OPEN_ARENA` — i.e. tab orchestration as well as the attach/grant/window trio named in
+   `docs/architecture.md`. A new worker message must be one-shot, bounded, and off the chat path.
 3. **The DOM is touched only from the isolated world.** The single exception is `stage-main.js`,
    serialized into the main world once per explicit staged-file Send, under a single-use 20-second
    grant.
