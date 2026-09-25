@@ -1,0 +1,19 @@
+{
+  "name": "arena-auto-chat",
+  "version": "2.8.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling for the Arena Auto Chat Chrome extension. The extension itself has no runtime dependencies and is loaded unpacked.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "check": "npm run lint && npm test"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5",
+    "jsdom": "^25.0.1"
+  }
+}
