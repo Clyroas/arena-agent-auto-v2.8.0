@@ -14,9 +14,10 @@ Version 2.8.1 · no build step · no runtime dependencies.
   detached **floating window** (`floating.html`) with remembered geometry. Connect to a signed-in
   Arena tab (Agent Mode or Direct) and send from the panel; replies stream back live.
 - **Automatic mode/model switching** — choosing a mode or Direct model brings the connected
-  Arena tab and its browser window forward (restoring it if minimized), then reconnects after
-  loading. No manual tab click is needed to start loading; nothing is sent. Sign-in and Arena
-  dialogs still require your input. The floating panel may move behind the browser.
+  Arena tab and its browser window forward (restoring it if minimized) so the page can load,
+  then reconnects and automatically restores your previous live window and tab once ready.
+  No manual tab click is needed to start loading; nothing is sent. Sign-in and Arena
+  dialogs still require your input.
 - **Live activity view** — while Arena works, the panel shows the in-progress text (with a caret
   while genuinely still streaming), tool steps as they start, clarification cards you can answer,
   and response pairs you can choose between — all marked *not a final answer* until Arena finishes.
