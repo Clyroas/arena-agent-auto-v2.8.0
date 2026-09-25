@@ -2,7 +2,7 @@ import { setupFloatingGeometry } from './window-geometry.js';
 import { ConversationView } from './conversation-view.js';
 import { AgentClient } from './agent-client.js';
 import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl, withTimeout } from './core.js';
-import { liveStatus } from './live-status.js';
+import { liveStatus, questionState } from './live-status.js';
 import { recentModels, rememberModel } from './recent-models.js';
 import { findLinks, hostLabel, captureLink, hasShotAccess, requestShotAccess, removeShotAccess } from './screenshot.js';
 import './attachment-policy.js'; // Registers ArenaAgentAttachments (same text the page adapter loads).
@@ -136,7 +136,7 @@ function render() {
   $('attach-files').title = uploadReady ? 'Attach images or files from your computer' : 'Staged files can only be sent after the Arena tab exposes its composer file input. Attach them in Arena until then.';
   $('prepare').textContent = staged.length ? `Send to Arena · ${staged.length} file${staged.length > 1 ? 's' : ''}` : 'Send to Arena';
   $('prepare').title = staged.length ? 'Send this message together with the staged files' : '';
-  $('prompt').placeholder = state === 'ready' ? 'Type a message to send to Arena…' : state === 'reconnecting' && !pending ? 'Reconnecting to Arena… you can keep typing' : pending?.live?.questions?.length ? 'Answer the question cards above to continue…' : pending ? 'Arena is working on this task…' : 'Connect your Arena tab to start…';
+  $('prompt').placeholder = state === 'ready' ? 'Type a message to send to Arena…' : state === 'reconnecting' && !pending ? 'Reconnecting to Arena… you can keep typing' : questionState(pending?.live?.questions) === 'answerable' ? 'Answer the question cards above to continue…' : pending ? 'Arena is working on this task…' : 'Connect your Arena tab to start…';
   for (const id of ['refresh', 'open', 'open-direct-tab', 'focus', 'reconnect', 'disconnect', 'cancel', 'float-window']) $(id).disabled = busy;
   $('pending').hidden = !pending;
   $('connection-info').hidden = !tab;
@@ -145,11 +145,11 @@ function render() {
   $('connected-tab-short').textContent = tab ? `Tab ${tab.id}` : '';
   $('connected-tab-short').title = tab?.url || '';
   $('pending').dataset.state = pending?.status || '';
-  $('pending').dataset.question = String(!!pending?.live?.questions?.length && pending?.status !== 'error');
+  $('pending').dataset.question = String(questionState(pending?.live?.questions) === 'answerable' && pending?.status !== 'error');
   $('tab-name').textContent = tab ? tabLabel(tab) : '';
   $('tab-url').textContent = tab?.url || '';
-  $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.8.0 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
-  $('progress').textContent = pending?.status === 'error' ? 'Capture stopped. Read the error above and check the Arena tab. No manual reply entry is available.' : pending?.phase === 'review' ? 'Closing the task-review panel and waiting for the composer. No feedback is selected.' : pending?.live?.questions?.length ? 'Review the question cards above. Select an answer, then submit it explicitly. Sensitive or unsupported actions stay in Arena.' : pending?.status === 'waiting' ? 'Your message is in Arena. The status above follows its visible activity; the final reply appears separately — no response time limit. Approvals and unsupported controls stay in Arena.' : pending?.phase === 'upload' ? 'Placing your staged files into the Arena composer, then attempting exactly one Send click…' : 'Preparing the Arena composer and attempting exactly one Send click…';
+  $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.8.1 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
+  $('progress').textContent = pending?.status === 'error' ? 'Capture stopped. Read the error above and check the Arena tab. No manual reply entry is available.' : pending?.phase === 'review' ? 'Closing the task-review panel and waiting for the composer. No feedback is selected.' : questionState(pending?.live?.questions) === 'answerable' ? 'Review the question cards above. Select an answer, then submit it explicitly. Sensitive or unsupported actions stay in Arena.' : pending?.status === 'waiting' ? 'Your message is in Arena. The status above follows its visible activity; the final reply appears separately — no response time limit. Approvals and unsupported controls stay in Arena.' : pending?.phase === 'upload' ? 'Placing your staged files into the Arena composer, then attempting exactly one Send click…' : 'Preparing the Arena composer and attempting exactly one Send click…';
   const found = client?.ready ? client.historyCount || 0 : 0, imported = turns.filter(t => t.imported).length;
   $('history-import').hidden = !client?.ready || (!found && !imported);
   $('load-history').disabled = busy || !!historyRequest || !!pending || state !== 'ready';
@@ -463,7 +463,7 @@ async function recoverNow() {
     stopRecovery(); keepTabAwake(tab.id, true);
     if (pending?.resume) {
       pending.resume = false; pending.phase = ''; pending.resumed = true; state = 'waiting';
-      next.watch(pending.id, pending.prompt, pending.userMessageId, tab.url, !!pending.attachments?.length);
+      next.watch(pending.id, pending.prompt, pending.userMessageId, tab.url, !!pending.attachments?.length, pending.questionRowIds);
       notice('Reconnected to the Arena tab. Still tracking your message — nothing was resent.');
     } else { state = 'ready'; notice('Reconnected to the Arena tab automatically. Nothing was resent.'); }
   } catch (error) {
@@ -526,6 +526,12 @@ function handleEvent(event) {
         if ((event.text || '') !== (turn.live?.text || '')) turn.textChangedAt = now;
         turn.lastActivityAt = now; turn.acceptedAt ||= now;
         turn.live = { text: event.text, rich: event.rich || null, tools: event.tools, questions: event.questions, interactionNotice: event.interactionNotice, thinking: event.thinking || null, generating: !!event.generating, pair: event.pair || null };
+        // v2.8.1: remember every row that ever held a card, so a reconnect after an answer can still
+        // tell the answered row (now plain text) from the new reply instead of stopping as ambiguous.
+        if (Array.isArray(event.questions)) {
+          const seen = event.questions.map(q => q.rowId).filter(Boolean);
+          if (seen.length) turn.questionRowIds = [...new Set([...(turn.questionRowIds || []), ...seen])].slice(-64);
+        }
         if (event.pair?.prompt && event.pair.ready && !turn.pairNoticed) { turn.pairNoticed = true; notice('Arena answered with two responses and asks which one to continue with. Choose below or in Arena — nothing is chosen for you.'); }
         turn.liveRevision = (turn.liveRevision || 0) + 1; }
       break;

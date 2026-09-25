@@ -45,7 +45,7 @@ const port = {
   },
   disconnect() {}
 };
-function emit(event) { portHandler?.({ documentId: 'dev-document', adapterVersion: '2.8.0', ...event }); }
+function emit(event) { portHandler?.({ documentId: 'dev-document', adapterVersion: '2.8.1', ...event }); }
 function emitReady() {
   emit({ type: 'READY', url: URL_AGENT, inputKind: 'textarea', reviewPending: false, uploadKind: 'input', fileInputCount: 1, historyCount: 3,
     pageKind: 'agent', model: '', models: [], blocked: '' });

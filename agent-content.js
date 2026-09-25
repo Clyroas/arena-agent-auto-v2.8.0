@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '2.8.0';
+  const VERSION = '2.8.1';
   const runtime = chrome.runtime;
   const previous = globalThis.__ARENA_AGENT_REGISTRATION__;
   if (previous?.version === VERSION && previous.isAlive?.()) return;
@@ -13,7 +13,7 @@
   const LEASE_MS = 5 * 60 * 1000;
   const consumed = new Set();
   const documentId = crypto.randomUUID();
-  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.8.0' }); } catch { cleanup(); } }
+  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.8.1' }); } catch { cleanup(); } }
   function stopTransaction() { transaction = null; }
   function cleanup() {
     stopTransaction(); observer?.disconnect(); observer = null;
@@ -356,8 +356,11 @@
       D.checkBlocks();
       const list = D.rows(), index = list.findIndex(row => row.id === message.userMessageId && row.user);
       if (index < 0) D.fail('WATCH_UNAVAILABLE', 'Your message is no longer visible in the Arena tab, so its reply cannot be tracked here. Read it in Arena; nothing was resent.');
+      // v2.8.1: rows that held a clarification card before the reconnect stay history after it, so an
+      // answered card whose controls are already gone cannot look like a second reply (AMBIGUOUS_REPLY).
+      const known = Array.isArray(message.knownQuestionRows) ? message.knownQuestionRows.filter(id => typeof id === 'string' && id.length <= 200).slice(0, 64) : [];
       const tx = { requestId: message.requestId, prompt: message.prompt.trim(), url: location.href, clicked: true, resumed: true,
-        userId: message.userMessageId, baseline: list.slice(0, index).map(row => row.id), ackDeadline: Infinity, attachmentLabels: !!message.hadAttachments };
+        userId: message.userMessageId, baseline: list.slice(0, index).map(row => row.id), ackDeadline: Infinity, attachmentLabels: !!message.hadAttachments, questionRows: known };
       transaction = tx;
       emit({ type: 'WATCHING', requestId: tx.requestId });
       scan();

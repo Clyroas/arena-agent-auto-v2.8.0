@@ -22,6 +22,22 @@ export function latestSentence(text, max = 140) {
   return `…${space > 0 && space < 30 ? cut.slice(space + 1) : cut}`;
 }
 
+// v2.8.1: an answered card (checked in Arena) means the agent is working, not waiting. Only cards
+// that can still be answered here ask for an answer; sensitive ones the panel never touches ask to be
+// handled in Arena. Old adapters send no answered/sensitive flags, so the reason text distinguishes an
+// answered card ("already selected") from one that still needs the user.
+export function questionState(questions) {
+  const list = Array.isArray(questions) ? questions : [];
+  if (!list.length) return 'none';
+  if (list.some(q => !q.readOnly && !q.answerState)) return 'answerable';
+  const needsArena = list.some(q => {
+    if (typeof q.answered === 'boolean') return !q.answered;
+    if (typeof q.sensitive === 'boolean' && q.sensitive) return true;
+    return !/already selected/i.test(q.reason || '');
+  });
+  return needsArena ? 'arena' : 'answered';
+}
+
 export function liveStatus(turn, now = Date.now()) {
   if (!turn) return null;
   const live = turn.live || {};
@@ -44,7 +60,9 @@ export function liveStatus(turn, now = Date.now()) {
   if (picked && picked !== 'skip' && (live.pair || !live.text)) return result('Continuing with your choice', `Waiting for Arena to continue with Response ${picked.toUpperCase()}.`, 'working');
   if (live.pair?.prompt && live.pair.ready) return result('Choose a response', 'Arena answered with two responses and asks which one to continue with. Nothing is chosen for you.', 'question');
   if (live.pair) return result('Writing two responses', 'Arena is answering with two anonymous responses (Battle in Direct).', 'writing');
-  if (live.questions?.length) return result('Waiting for your answer', 'Arena asked a question below. Nothing is chosen for you.', 'question');
+  const qState = questionState(live.questions);
+  if (qState === 'answerable') return result('Waiting for your answer', 'Arena asked a question below. Nothing is chosen for you.', 'question');
+  if (qState === 'arena') return result('Waiting for you in Arena', 'Arena asked a question this panel does not answer. Handle it in Arena.', 'question');
   if (live.interactionNotice) return result('Waiting for you in Arena', 'Arena shows a control this panel does not operate.', 'question');
   const textFresh = !!live.text && turn.textChangedAt && now - turn.textChangedAt < RECENT_TEXT_MS;
   if (live.thinking?.state === 'active' && !textFresh)

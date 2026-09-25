@@ -6,7 +6,7 @@ and captures the matching reply from the transcript. There is no manual fallback
 API client: if the page can't be driven reliably, the extension fails closed with an explanation
 instead of guessing.
 
-Version 2.8.0 · no build step · no runtime dependencies.
+Version 2.8.1 · no build step · no runtime dependencies.
 
 ## What it does
 
@@ -82,7 +82,7 @@ The extension has no build step; dev tooling is Node-based and dev-only (`node >
 
 ```bash
 npm install
-npm run check     # eslint + 92 tests (node --test)
+npm run check     # eslint + 98 tests (node --test)
 npm run lint
 npm test
 ```
@@ -114,6 +114,6 @@ the conventions CI enforces.
 | `screenshot.js` | Link screenshots (optional permission, opt-in per use) |
 | `core.js`, `copy.js`, `theme.js`, `customization.js`, `recent-models.js`, `window-geometry.js`, `floating-window.js` | Small shared modules |
 | `dev/` | Dev-only motion preview (not part of the extension) |
-| `test/` | 92 tests via `node --test` (jsdom where the DOM matters) |
+| `test/` | 98 tests via `node --test` (jsdom where the DOM matters) |
 | `STABILITY-REVIEW.md` | The end-to-end stability pass: fixes, additions, open findings |
 | `docs/` | Architecture and development guides |

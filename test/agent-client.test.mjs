@@ -75,7 +75,7 @@ test('a successful handshake turns the port into a ready client', async () => {
   assert.equal(client.pageKind, 'direct');
   assert.equal(client.model, 'Max');
   assert.deepEqual(client.models, [{ name: 'Max', org: 'Arena' }]);
-  assert.equal(ADAPTER_VERSION, '2.8.0');
+  assert.equal(ADAPTER_VERSION, '2.8.1');
   assert.ok(HEARTBEAT_MS > 0);
   client.close();
   assert.equal(port.disconnected, true);
