@@ -94,11 +94,48 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         if (!allowed) throw new Error('Only a new Arena Direct chat or Agent Mode can be opened from the panel.');
         const tab = await chrome.tabs.get(message.tabId);
         if (!isArena(tab.url)) throw new Error('This tab is no longer on Arena.');
+        // Snapshot the current window and active tab so the user's prior view can be restored after loading.
+        const lastFocused = typeof chrome.windows?.getLastFocused === 'function'
+          ? await chrome.windows.getLastFocused().catch(() => null)
+          : null;
+        let previousNormalWindowId = null;
+        if (lastFocused?.type === 'popup' && typeof chrome.windows?.getLastFocused === 'function') {
+          const normalWin = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+          if (normalWin && normalWin.id !== tab.windowId) previousNormalWindowId = normalWin.id;
+        }
+        const win = await chrome.windows.get(tab.windowId);
+        const wasMinimized = win.state === 'minimized';
+        const [activeTab] = typeof chrome.tabs?.query === 'function'
+          ? await chrome.tabs.query({ windowId: tab.windowId, active: true }).catch(() => [])
+          : [];
+        const previousTabId = activeTab && activeTab.id !== tab.id ? activeTab.id : null;
         // Foreground only this explicit switch: background pages can defer hydration until
         // visible, leaving the panel stuck checking controls until the user clicks the tab.
-        const win = await chrome.windows.get(tab.windowId);
-        await chrome.windows.update(tab.windowId, { focused: true, ...(win.state === 'minimized' ? { state: 'normal' } : {}) });
+        await chrome.windows.update(tab.windowId, { focused: true, ...(wasMinimized ? { state: 'normal' } : {}) });
         await chrome.tabs.update(tab.id, { url: target, active: true, autoDiscardable: false });
+        return {
+          windowId: tab.windowId,
+          wasMinimized,
+          previousWindowId: lastFocused?.id ?? null,
+          previousNormalWindowId,
+          previousTabId
+        };
+      }
+      case 'RESTORE_TAB': {
+        // Return to the window and tab the user was on before Arena was brought forward for loading.
+        const { windowId, wasMinimized, previousWindowId, previousNormalWindowId, previousTabId } = message || {};
+        if (Number.isInteger(previousTabId)) {
+          await chrome.tabs.update(previousTabId, { active: true }).catch(() => {});
+        }
+        if (wasMinimized && Number.isInteger(windowId)) {
+          await chrome.windows.update(windowId, { state: 'minimized' }).catch(() => {});
+        }
+        if (Number.isInteger(previousNormalWindowId) && previousNormalWindowId !== windowId && previousNormalWindowId !== previousWindowId) {
+          await chrome.windows.update(previousNormalWindowId, { focused: true }).catch(() => {});
+        }
+        if (Number.isInteger(previousWindowId) && previousWindowId !== windowId) {
+          await chrome.windows.update(previousWindowId, { focused: true }).catch(() => {});
+        }
         return true;
       }
       case 'OPEN_ARENA': {

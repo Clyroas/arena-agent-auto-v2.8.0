@@ -70,7 +70,8 @@ const worker = {
   STAGE_REVOKE: () => ({ ok: true, value: true }),
   OPEN_ARENA: () => ({ ok: true, value: { id: 2 } }),
   OPEN_FLOATING: () => ({ ok: true, value: true }),
-  NAVIGATE_TAB: () => ({ ok: true, value: true })
+  NAVIGATE_TAB: () => ({ ok: true, value: { windowId: 7, wasMinimized: false, previousWindowId: 7, previousNormalWindowId: null, previousTabId: null } }),
+  RESTORE_TAB: () => ({ ok: true, value: true })
 };
 
 globalThis.chrome = {

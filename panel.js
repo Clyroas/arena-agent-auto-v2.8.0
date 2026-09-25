@@ -290,7 +290,7 @@ async function switchChat(kind, name = '') {
   if (!tab || pending || busy || switching) return;
   const target = kind === 'agent' ? AGENT_URL : directModelUrl(name);
   const title = kind === 'agent' ? 'Open Agent Mode?' : name ? `New chat with ${name}?` : 'Open a new Direct chat?';
-  const body = `Your connected Arena tab will open ${kind === 'agent' ? 'Agent Mode' : name ? `a new Direct chat with “${name}” selected by Arena` : 'a new Direct chat'}. Arena is brought to the foreground automatically so the page can load. Nothing is sent. This panel’s chat view is cleared; your Arena history is unchanged.${$('prompt').value || staged.length ? ' Your draft and staged files stay here.' : ''}`;
+  const body = `Your connected Arena tab will open ${kind === 'agent' ? 'Agent Mode' : name ? `a new Direct chat with “${name}” selected by Arena` : 'a new Direct chat'}. Arena is brought to the foreground automatically so the page can load, then your previous page is restored. Nothing is sent. This panel’s chat view is cleared; your Arena history is unchanged.${$('prompt').value || staged.length ? ' Your draft and staged files stay here.' : ''}`;
   $('model-dialog').close();
   if (!await askConfirm(title, body, 'Open', 'Cancel')) return;
   const tabId = tab.id;
@@ -298,8 +298,9 @@ async function switchChat(kind, name = '') {
   pending = null; turns = []; historyRequest = null; state = 'connecting';
   notice(kind === 'agent' ? 'Opening Agent Mode in your Arena tab…' : `Opening a new Direct chat${name ? ` with ${name}` : ''} in your Arena tab…`); render();
   const load = waitForTabLoad(tabId);
+  let nav = null;
   try {
-    await rpc('NAVIGATE_TAB', { tabId, url: target });
+    nav = await rpc('NAVIGATE_TAB', { tabId, url: target });
     await load.done;
     switching = false;
     await connect(tabId);
@@ -313,7 +314,11 @@ async function switchChat(kind, name = '') {
     } else notice(client.pageKind === 'direct' ? `New Direct chat${client.model ? ` with ${client.model}` : ''}. Pick a model from the chip above the message box if you like.` : 'Agent Mode is ready. Send a message below.');
   } catch (error) {
     load.cancel(); state = 'error'; notice(error.message || 'Could not open that Arena page. Open Settings to reconnect.');
-  } finally { switching = false; render(); }
+  } finally {
+    if (nav) await rpc('RESTORE_TAB', nav).catch(() => {});
+    switching = false;
+    render();
+  }
 }
 // Keep the chip current if the model is changed in Arena's own picker.
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && client?.ready) { try { client.queryModel(); } catch { /* ignore */ } } });
