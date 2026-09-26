@@ -1,6 +1,6 @@
 # SPEC: ROG Design Language Replacement (v2.10.0)
 
-Status: **DRAFT — awaiting approval** · Phase: spec-driven-development (SPECIFY)
+Status: **APPROVED** (human: "6 yes, go" + earlier "1–5 confirmed") · Phase: build (incremental-implementation)
 Source: chat spec draft (turn "Full design language replacement…") + resolved decisions below.
 
 ## 1. Objective
