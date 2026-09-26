@@ -25,7 +25,7 @@ const staged = []; // Staged files live in memory only, until an accepted send o
 let shotAccess = false, shotBusy = '', shotProgress = '', shotSignature = ''; // link screenshots (v2.6.0)
 let shotOperation = null;
 $('attachment-input').accept = ATTACHMENT_POLICY.accept;
-const labels = { disconnected: 'Disconnected', connecting: 'Checking controls…', reconnecting: 'Reconnecting…', ready: 'Auto ready', sending: 'Sending…', waiting: 'Waiting for Arena', error: 'Stopped · check tab' };
+const labels = { disconnected: 'Disconnected', connecting: 'Checking…', reconnecting: 'Reconnecting…', ready: 'Ready', sending: 'Sending…', waiting: 'Waiting', error: 'Stopped' };
 // One-shot worker requests are always bounded (see withTimeout in core.js). A suspended, restarting or
 // updated service worker must never leave this panel permanently busy: a late answer is ignored and the
 // caller gets a clear error it can show, instead of a spinner that never ends.
@@ -75,9 +75,19 @@ document.addEventListener('keydown', event => {
   }
   if (event.key === 'Escape' && $('settings-sheet').dataset.open === 'true' && !$('confirm-dialog').open) { event.preventDefault(); setSheet(false); }
 });
-// The composer grows with its text up to a cap, like Messages.
-function fitPrompt() { const field = $('prompt'); field.style.height = 'auto'; field.style.height = `${field.scrollHeight}px`; }
+// The composer grows with its text up to a cap, like Messages. Live frames call this on every render;
+// measuring only when the text or the field's width changed keeps a streaming reply from thrashing layout.
+let promptFit = { value: null, width: -1 };
+function fitPrompt() {
+  const field = $('prompt');
+  const width = field.clientWidth;
+  if (promptFit.value === field.value && promptFit.width === width && field.style.height) return;
+  promptFit = { value: field.value, width };
+  field.style.height = 'auto';
+  field.style.height = `${field.scrollHeight}px`;
+}
 $('prompt').addEventListener('input', fitPrompt);
+if (typeof ResizeObserver === 'function') new ResizeObserver(() => fitPrompt()).observe($('prompt'));
 $('prompt').addEventListener('input', () => { if (shotOperation) { cancelScreenshot('Screenshot cancelled because the draft changed.'); render(); } else renderShotChips(); });
 // Arena's message box takes up to 30,000 characters here; show the count near the limit and say so when a
 // paste had to be cut (the browser silently drops the rest at maxlength).
@@ -102,7 +112,7 @@ $('prompt').addEventListener('paste', event => {
   setTimeout(renderPromptCount, 0);
 });
 $('prompt').addEventListener('input', event => { if (event.inputType !== 'insertFromPaste') promptCut = 0; renderPromptCount(); });
-setSheet(true); // Disconnected on open: show the connection setup.
+setSheet(false); // The conversation is the surface. Setup opens from the empty state, the status pill, or after disconnect.
 // Messages appear in full, then tuck away into a small dot in the chat corner. Info shrinks by itself
 // after a few seconds (not while hovered/focused); errors stay until you minimize them.
 const NOTICE_AUTO_MS = 6000;
@@ -144,6 +154,7 @@ function render() {
   // later, mid-send. Missing upload support is not drift: text chat still works.
   const drift = client?.ready ? capabilitySummary(client.capabilities) : null;
   $('status').textContent = labels[state]; $('status').dataset.state = state;
+  $('status-pill').title = state === 'error' ? 'Stopped. Check the Arena tab, then open connection settings.' : `${labels[state]}. Open connection settings.`;
   document.body.dataset.working = String(!!pending && pending.status !== 'error');
   document.body.dataset.connected = String(!!client?.ready);
   $('connected').hidden = !tab;
@@ -155,6 +166,8 @@ function render() {
   $('prompt').disabled = pending ? true : busy || (state !== 'reconnecting' && (state !== 'ready' || !client?.ready));
   const uploadReady = client?.ready && client.uploadKind === 'input';
   $('attach-files').disabled = busy || !!pending || !!pickerAction || state !== 'ready' || !uploadReady;
+  $('attach-files').dataset.count = staged.length ? String(staged.length) : '';
+  $('attach-files').setAttribute('aria-label', `Attach images or files from your computer${staged.length ? `, ${staged.length} file${staged.length === 1 ? '' : 's'} staged` : ''}`);
   $('attach-files').title = uploadReady ? 'Attach images or files from your computer' : 'Staged files can only be sent after the Arena tab exposes its composer file input. Attach them in Arena until then.';
   $('prepare').textContent = staged.length ? `Send to Arena · ${staged.length} file${staged.length > 1 ? 's' : ''}` : 'Send to Arena';
   $('prepare').title = staged.length ? 'Send this message together with the staged files' : '';

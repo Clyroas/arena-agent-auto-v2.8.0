@@ -1,6 +1,9 @@
-/* Arena Auto Chat — chat-first layout inspired by Apple's system UI.
-   Theme tokens follow iOS/macOS semantic colors; all surfaces inherit them. */
-@property --glow-angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+/* Arena Auto Chat — chat-first side panel.
+   Design contract: the conversation is the surface and Send is the primary action.
+   Mode, notices and the composer stack in one measured dock so nothing covers the
+   transcript. Colour comes from the theme and accent tokens — not a second rainbow.
+   Motion is short and state-keyed; working, error and focus are borders and words,
+   not spinning gradients. Narrow panels stack connection actions instead of clipping them. */
 
 :root {
   color-scheme: light;
@@ -74,6 +77,15 @@ body {
 ::selection { background: var(--accent-soft); }
 [hidden] { display: none !important; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.skip-link {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0);
+  white-space: nowrap; border: 0;
+}
+.skip-link:focus {
+  left: 12px; top: 8px; z-index: 80; width: auto; height: auto; margin: 0; overflow: visible; clip: auto;
+  padding: 8px 12px; border-radius: 10px; background: var(--accent); color: var(--accent-ink);
+  font-weight: 600; text-decoration: none;
+}
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 h1, h2, h3, h4 { margin: 0; }
@@ -114,10 +126,10 @@ select option { background: var(--surface); color: var(--label); }
 .toolbar-row { display: flex; align-items: center; gap: 8px; max-width: 760px; margin: 0 auto; }
 .brand-icon {
   flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
-  background: linear-gradient(140deg, #5e5ce6 0%, #0a84ff 48%, #64d2ff 100%);
-  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .25), 0 1px 3px rgba(0, 0, 0, .15);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .22);
 }
-.brand-icon span { color: #fff; font: 600 18px/1 var(--font); margin-top: -2px; }
+.brand-icon span { color: var(--accent-ink); font: 600 16px/1 var(--font); }
 .toolbar-title { flex: 1; min-width: 0; }
 .toolbar-title h1 { font-size: 14px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toolbar-title p { margin: 1px 0 0; font-size: 11px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -144,26 +156,26 @@ select option { background: var(--surface); color: var(--label); }
 .status-pill:has(.status[data-state="error"]) .status-dot { background: var(--red); }
 
 .notice {
-  max-width: 736px; margin: 9px auto 0; padding: 9px 12px; border-radius: 12px; font-size: 12.5px; line-height: 1.45;
-  background: var(--notice-bg); color: var(--label); overflow-wrap: anywhere; max-height: 30vh; overflow-y: auto;
+  max-width: 736px; margin: 9px auto 0; padding: 9px 12px; border-radius: 12px; font-size: 13px; line-height: 1.45;
+  background: var(--notice-bg); color: var(--label); overflow-wrap: anywhere; max-height: min(22vh, 136px); overflow-y: auto;
   box-shadow: inset 0 0 0 .5px var(--glass-border);
 }
 .notice[data-kind="error"] { background: var(--error-bg); }
 .notice:not([hidden]) { display: flex; align-items: flex-start; gap: 8px; animation: notice-in .22s ease-out; }
 .notice-text { flex: 1; min-width: 0; }
 .notice-minimize {
-  flex: none; width: 22px; height: 22px; margin: -2px -4px -2px 0; padding: 0; border: 0; border-radius: 999px;
+  flex: none; width: 28px; height: 28px; margin: -4px -6px -4px 0; padding: 0; border: 0; border-radius: 999px;
   display: grid; place-items: center; background: transparent; color: var(--secondary); cursor: pointer;
 }
 .notice-minimize:hover { background: var(--fill); color: var(--label); }
 .notice-minimize svg { width: 14px; height: 14px; }
 @keyframes notice-in { from { opacity: 0; transform: translateY(-4px); } }
-/* Minimized message: a small, quiet dot floating in the corner of the chat, above the composer. */
+/* Minimized message: a quiet dot in the dock row, beside the mode chip — in flow, so the transcript clears it. */
 .notice-dot {
-  position: absolute; right: 22px; bottom: calc(100% + 8px); width: 22px; height: 22px; padding: 0; border: 0;
-  border-radius: 999px; display: grid; place-items: center; cursor: pointer; opacity: .75;
-  background: var(--glass); box-shadow: inset 0 0 0 .5px var(--glass-border);
-  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); transition: opacity .15s, transform .15s;
+  position: static; flex: none; margin-left: auto; width: 28px; height: 28px; padding: 0; border: 0;
+  border-radius: 999px; display: grid; place-items: center; cursor: pointer; opacity: .85;
+  background: var(--surface); box-shadow: inset 0 0 0 .5px var(--separator);
+  transition: opacity .15s, transform .15s;
 }
 .notice-dot[hidden] { display: none; }
 .notice-dot:hover, .notice-dot:focus-visible { opacity: 1; transform: scale(1.12); }
@@ -193,13 +205,17 @@ select option { background: var(--surface); color: var(--label); }
   display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px 12px;
 }
 .empty-orb {
-  width: 58px; height: 58px; border-radius: 50%; margin-bottom: 18px;
-  background: conic-gradient(from var(--glow-angle), #0a84ff, #bf5af2, #ff375f, #ff9f0a, #64d2ff, #0a84ff);
-  filter: saturate(1.1); animation: glow-spin 8s linear infinite;
-  -webkit-mask: radial-gradient(circle at 50% 50%, #000 52%, transparent 72%); mask: radial-gradient(circle at 50% 50%, #000 52%, transparent 72%);
+  position: relative; width: 44px; height: 44px; border-radius: 14px; margin-bottom: 16px;
+  background: var(--accent); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .22);
 }
-.chat-empty h3 { font-size: 21px; font-weight: 600; letter-spacing: -.03em; margin-bottom: 6px; }
-.chat-empty p { margin: 0 0 16px; max-width: 300px; font-size: 13px; color: var(--secondary); }
+.empty-orb::after {
+  content: ""; position: absolute; inset: 12px; background: var(--accent-ink);
+  -webkit-mask: url("icons/ui/sparkle.svg") center / contain no-repeat;
+  mask: url("icons/ui/sparkle.svg") center / contain no-repeat;
+}
+.chat-empty h3 { font-size: 20px; font-weight: 650; letter-spacing: -.03em; margin-bottom: 6px; }
+.chat-empty p { margin: 0 0 16px; max-width: 32ch; font-size: 13.5px; color: var(--secondary); }
+#empty-connect { min-height: 36px; padding-inline: 16px; }
 body:not([data-connected="false"]) #empty-connect { display: none; }
 
 .history-import { display: flex; flex-direction: column; align-items: center; gap: 5px; margin: 0 0 26px; }
@@ -227,11 +243,12 @@ body:not([data-connected="false"]) #empty-connect { display: none; }
 .assistant-message .message-meta { margin: 0 0 7px; }
 .assistant-mark {
   position: relative; width: 20px; height: 20px; border-radius: 50%; font-size: 0; flex: none;
-  background: conic-gradient(from 200deg, #0a84ff, #bf5af2, #ff375f, #ff9f0a, #0a84ff);
+  background: var(--accent);
 }
 .assistant-mark::after {
-  content: ""; position: absolute; inset: 4px;
-  background: url("icons/ui/sparkle.svg") center / contain no-repeat;
+  content: ""; position: absolute; inset: 4px; background: var(--accent-ink);
+  -webkit-mask: url("icons/ui/sparkle.svg") center / contain no-repeat;
+  mask: url("icons/ui/sparkle.svg") center / contain no-repeat;
 }
 .bubble.assistant { padding: 0 2px; line-height: 1.62; color: var(--label); }
 .turn-outcome {
@@ -288,28 +305,27 @@ body:not([data-connected="false"]) #empty-connect { display: none; }
 /* Waiting indicator with the Apple Intelligence-style edge glow */
 .pending-reply {
   position: relative; margin: 4px 0 22px; padding: 14px 16px; border-radius: 18px; background: var(--surface);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .07);
+  box-shadow: inset 0 0 0 .5px var(--separator);
 }
 .pending-reply::before {
-  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px; pointer-events: none;
-  background: conic-gradient(from var(--glow-angle), #0a84ff, #bf5af2, #ff375f, #ff9f0a, #64d2ff, #0a84ff);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  animation: glow-spin 3.6s linear infinite;
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 65%, transparent);
 }
-.pending-reply[data-state="error"]::before { background: var(--red); animation: none; }
+.pending-reply[data-state="error"]::before { box-shadow: inset 0 0 0 1.5px var(--red); }
 .pending-heading { display: flex; align-items: center; gap: 10px; }
 .pending-dot {
-  flex: none; width: 16px; height: 16px; border-radius: 50%;
-  background: conic-gradient(from var(--glow-angle), #0a84ff, #bf5af2, #ff375f, #ff9f0a, #0a84ff);
-  animation: glow-spin 1.6s linear infinite; box-shadow: 0 0 10px color-mix(in srgb, #bf5af2 45%, transparent);
+  flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: pulse 1.2s ease-in-out infinite;
 }
-.pending-reply[data-kind="question"] .pending-dot { animation-duration: 4s; }
-.pending-reply[data-kind="reconnecting"]::before { background: var(--orange); animation: none; }
-.pending-reply[data-kind="reconnecting"] .pending-dot { background: var(--orange); animation: pulse 1.2s ease-in-out infinite; box-shadow: none; }
+.pending-reply[data-kind="question"] .pending-dot { animation-duration: 2.4s; }
+.pending-reply[data-kind="reconnecting"]::before,
+.pending-reply[data-kind="blocked"]::before { box-shadow: inset 0 0 0 1.5px var(--orange); }
 /* A security verification pauses tracking like a reconnect does: same calm orange, not the red "stopped". */
-.pending-reply[data-kind="blocked"]::before { background: var(--orange); animation: none; }
-.pending-reply[data-kind="blocked"] .pending-dot { background: var(--orange); animation: pulse 1.2s ease-in-out infinite; box-shadow: none; }
+.pending-reply[data-kind="reconnecting"] .pending-dot,
+.pending-reply[data-kind="blocked"] .pending-dot {
+  background: var(--orange); box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 22%, transparent);
+}
 .pending-reply[data-state="error"] .pending-dot { background: var(--red); animation: none; box-shadow: none; }
 #pending-title {
   flex: 1; min-width: 0; font-size: 14px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -337,20 +353,25 @@ body:not([data-connected="false"]) #empty-connect { display: none; }
 .latest-reply:active:not(:disabled) { transform: translateX(-50%) scale(.97); }
 
 /* ---------- Composer ---------- */
-.composer-dock { position: absolute; inset: auto 0 0 0; z-index: 20; padding: 0 12px 9px; pointer-events: none; }
+.composer-dock {
+  position: absolute; inset: auto 0 0 0; z-index: 20; padding: 0 12px 10px; pointer-events: none;
+  background: var(--bg);
+}
+/* A short fade, not a second surface: the last line eases into the dock instead of cutting off under it. */
+.composer-dock::before {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 28px; pointer-events: none;
+  background: linear-gradient(to top, var(--bg), transparent);
+}
 .composer-dock > * { pointer-events: auto; }
 .arena-composer {
-  position: relative; max-width: 720px; margin: 0 auto; padding: 5px; border-radius: 24px;
+  position: relative; max-width: 720px; margin: 0 auto; padding: 5px; border-radius: 18px;
   background: var(--glass-strong); border: .5px solid var(--glass-border); box-shadow: var(--shadow-lg);
   transition: box-shadow .2s;
 }
 .arena-composer:focus-within { box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 3.5px var(--accent-soft), var(--shadow-lg); }
-body[data-working="true"] .arena-composer::before {
-  content: ""; position: absolute; inset: -1.5px; border-radius: 25.5px; padding: 1.5px; pointer-events: none;
-  background: conic-gradient(from var(--glow-angle), #0a84ff, #bf5af2, #ff375f, #ff9f0a, #64d2ff, #0a84ff);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  animation: glow-spin 3.6s linear infinite; opacity: .85;
+/* Working is a still accent edge. A spinning ring fought the focus indicator and the text the user is reading. */
+body[data-working="true"] .arena-composer:not(:focus-within) {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent), var(--shadow-lg);
 }
 .composer-row { display: flex; align-items: flex-end; gap: 2px; }
 #prompt {
@@ -375,7 +396,15 @@ body[data-working="true"] .arena-composer::before {
   -webkit-mask: url("icons/ui/send.svg") center / 16px no-repeat; mask: url("icons/ui/send.svg") center / 16px no-repeat;
 }
 .send-button:disabled { opacity: .3; }
-.composer-note { max-width: 720px; margin: 6px auto 0; font-size: 10.5px; color: var(--tertiary); text-align: center; line-height: 1.35; }
+.composer-note { max-width: 720px; margin: 6px auto 0; font-size: 11.5px; color: var(--tertiary); text-align: center; line-height: 1.4; overflow-wrap: anywhere; }
+.attach-button { position: relative; }
+.attach-button[data-count]:not([data-count=""])::after {
+  content: attr(data-count); position: absolute; top: 1px; right: 1px; min-width: 15px; height: 15px; padding: 0 3px;
+  border-radius: 999px; background: var(--accent); color: var(--accent-ink); font: 700 10px/15px var(--font);
+  letter-spacing: 0; text-align: center; pointer-events: none;
+}
+#model-confirmation { max-width: 720px; margin: 0 auto 8px; overflow-wrap: anywhere; }
+#model-confirmation p { margin: 0 0 6px; }
 
 .attachments { display: flex; flex-direction: column; gap: 6px; margin: 2px 2px 4px; padding: 6px 6px 4px; }
 .attachment-chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -489,7 +518,6 @@ dialog .button-row button.primary { font-weight: 600; background: transparent; c
 dialog::backdrop { background: var(--backdrop); }
 
 /* ---------- Motion ---------- */
-@keyframes glow-spin { to { --glow-angle: 360deg; } }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
 @keyframes pulse { 50% { opacity: .35; } }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -515,13 +543,21 @@ dialog::backdrop { background: var(--backdrop); }
   .customization-grid { grid-template-columns: 1fr; }
   .bubble.user { max-width: 92%; }
 }
+@media (max-width: 560px) {
+  .mode-actions, #connection-escape { flex-direction: column; }
+  .mode-actions > button, #connection-escape > button { flex: none; width: 100%; }
+}
 
 /* ---------- Chat mode & model (v2.3.0) ---------- */
+.dock-meta {
+  display: flex; align-items: center; gap: 8px; max-width: 720px; margin: 0 auto 8px; min-width: 0;
+}
+.dock-meta:not(:has(button:not([hidden]))) { display: none; }
+.dock-meta:has(#notice-dot:not([hidden])) .model-chip { max-width: calc(100% - 36px); }
 .model-chip {
-  position: absolute; left: 22px; bottom: calc(100% + 6px); max-width: calc(100% - 90px); height: 26px; padding: 0 9px 0 4px;
+  position: static; flex: 0 1 auto; min-width: 0; max-width: 100%; height: 30px; padding: 0 10px 0 4px;
   display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 999px; cursor: pointer;
-  font-size: 12px; color: var(--label); background: var(--glass); box-shadow: inset 0 0 0 .5px var(--glass-border);
-  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  font-size: 12px; color: var(--label); background: var(--surface); box-shadow: inset 0 0 0 .5px var(--separator);
 }
 .model-chip[hidden] { display: none; }
 .model-chip:hover:not(:disabled) { background: var(--fill); }
@@ -659,7 +695,7 @@ dialog.model-dialog { width: 380px; max-width: calc(100% - 24px); text-align: le
 .live-text.rich { white-space: normal; }
 
 /* ---------- Motion (v2.8.x) -------------------------------------------------------------------
-   The panel already moves in a few places (rise, shimmer, glow-spin, the sheet spring, the notice
+   The panel already moves in a few places (rise, shimmer, the sheet spring, the notice
    slide, the switch knob). This section extends that same vocabulary to the moments that used to be
    instantaneous: a reply arriving, a clarification card appearing, a file being staged, a copy
    succeeding, a dialog opening, the composer becoming sendable. Every rule here is driven by state
@@ -686,7 +722,6 @@ dialog.model-dialog { width: 380px; max-width: calc(100% - 24px); text-align: le
 .chat-empty > :nth-child(2) { animation-delay: .05s; }
 .chat-empty > :nth-child(3) { animation-delay: .1s; }
 .chat-empty > :nth-child(4) { animation-delay: .15s; }
-.chat-empty .empty-orb { animation: arrive .5s cubic-bezier(.2, .8, .2, 1) both, glow-spin 8s linear infinite .35s; }
 
 /* Staged files pop in; removing one keeps the rest still. */
 .attachment-chip { animation: chip-in .22s cubic-bezier(.3, .9, .4, 1.1) both; }

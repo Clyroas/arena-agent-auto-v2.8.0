@@ -148,7 +148,7 @@ async function boot() {
   const response = await fetch(panelUrl);
   if (!response.ok) throw new Error(`panel.html could not be fetched (${response.status}). Serve this folder over http:// (for example: python3 -m http.server 8080), not file://`);
   const markup = await response.text();
-  // The body tag carries attributes (<body data-sheet="open">), so match the tag, not a literal string.
+  // The body tag carries attributes, so match the tag, not a literal string.
   const body = markup.replace(/^[\s\S]*?<body[^>]*>/i, '').replace(/<\/body>[\s\S]*$/i, '');
   if (!body.includes('id="prepare"')) throw new Error('panel.html did not contain the panel markup');
   document.body.insertAdjacentHTML('afterbegin', body.replace(/<script[\s\S]*?<\/script>/g, ''));
@@ -175,6 +175,8 @@ const $ = id => document.getElementById(id);
 try { await boot(); } catch (error) { fail(error); throw error; }
 const until = async (predicate, tries = 100) => { for (let i = 0; i < tries; i++) { if (predicate()) return true; await wait(50); } return false; };
 await until(() => $('tabs').value === '1');
+// Connection controls live in the sheet, which starts closed so the chat is the first surface.
+if ($('settings-sheet').dataset.open !== 'true') $('empty-connect').click();
 $('confirmed').checked = true;
 $('authorize').checked = true;
 $('confirmed').dispatchEvent(new Event('change'));

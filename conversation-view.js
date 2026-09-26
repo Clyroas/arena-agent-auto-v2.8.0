@@ -37,9 +37,18 @@ export class ConversationView {
     // The toolbar and composer float over the chat as glass; their heights pad the scroller.
     const root = doc.documentElement, toolbar = doc.getElementById('toolbar'), dock = doc.querySelector('.composer-dock');
     this.layoutResize = new ResizeObserver(() => {
-      const top = `${Math.ceil(toolbar.getBoundingClientRect().height)}px`, bottom = `${Math.ceil(dock.getBoundingClientRect().height)}px`;
-      if (root.style.getPropertyValue('--toolbar-h') !== top) root.style.setProperty('--toolbar-h', top);
-      if (root.style.getPropertyValue('--composer-h') !== bottom) root.style.setProperty('--composer-h', bottom);
+      // A 0-height frame (first paint, or a display:none ancestor) must not collapse the insets to 0
+      // and hide the transcript under the toolbar. The dock includes the mode row, so its border box
+      // is the whole stack the transcript has to clear — chips are in flow, not floating over it.
+      const apply = (node, name) => {
+        if (!node) return;
+        const height = Math.ceil(node.getBoundingClientRect().height);
+        if (height <= 0) return;
+        const value = `${height}px`;
+        if (root.style.getPropertyValue(name) !== value) root.style.setProperty(name, value);
+      };
+      apply(toolbar, '--toolbar-h');
+      apply(dock, '--composer-h');
       if (this.following) this.toBottom(); else this.updateJump();
     });
     for (const node of [toolbar, dock]) if (node) this.layoutResize.observe(node);
