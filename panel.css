@@ -574,7 +574,7 @@ dialog.model-dialog { width: 380px; max-width: calc(100% - 24px); text-align: le
 .model-modes button { border: 0; border-radius: 7px; padding: 6px 4px; font-size: 12.5px; background: transparent; color: var(--label); cursor: pointer; }
 .model-modes button[aria-pressed="true"] { background: var(--glass-strong); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 #model-picker[hidden] { display: none; }
-#model-search { display: block; width: calc(100% - 28px); margin: 0 14px 8px; box-sizing: border-box; padding: 7px 10px; border-radius: 9px; border: 0; background: var(--fill); color: var(--label); font-size: 13px; }
+#model-search, #presets-search { display: block; width: calc(100% - 28px); margin: 0 14px 8px; box-sizing: border-box; padding: 7px 10px; border-radius: 9px; border: 0; background: var(--fill); color: var(--label); font-size: 13px; }
 .model-list { max-height: min(46vh, 360px); overflow-y: auto; margin: 0 8px; }
 .model-option { display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--label); text-align: left; cursor: pointer; }
 .model-option:hover, .model-option:focus-visible { background: var(--fill); }
@@ -610,6 +610,13 @@ dialog.model-dialog { width: 380px; max-width: calc(100% - 24px); text-align: le
 .picker-status:empty { display: none; }
 .picker-status[data-kind="error"] { color: var(--danger-ink); }
 #picker-picker[hidden] { display: none; }
+
+/* v2.9.0 — ready-made task prompts derived from the vendored agent-skills pack. The dialog reuses
+   the model-list vocabulary (row = listitem, button = control, group = heading); only the label and
+   the summary differ, so the summary needs a clamp and the label the system font. */
+.model-chip.presets-chip { padding-left: 10px; }
+.presets-label { font-family: var(--font); font-size: 13px; font-weight: 500; letter-spacing: -.01em; }
+.presets-summary { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* v2.5.0 — Battles in Direct: two anonymous responses, the user picks which one continues. */
 .pair-card {

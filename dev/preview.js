@@ -297,6 +297,12 @@ const acts = {
   async pickers() {
     // The chips sit in the composer; opening one emits Arena's own list, picking switches the demo repo.
     log('repo & branch chips are in the composer — open one and pick an option');
+  },
+  async presets() {
+    // One chip in the dock opens the prompt library derived from the vendored agent-skills pack.
+    // Choosing one only fills the draft; Send stays the single way out.
+    log('the task-prompt chip is in the dock — open it, search, and pick one');
+    $('presets-chip').click();
   }
 };
 
