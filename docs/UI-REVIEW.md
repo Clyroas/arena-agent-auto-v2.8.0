@@ -274,3 +274,45 @@ affect every de-emphasised label in light mode and every row of the two new pick
 
 Nothing in this pass changed runtime code, `.agents/`, `extension-files.json` or a version anchor; this
 document is the only file added, and it is not packaged.
+
+## Status after implementation
+
+Implemented on the same branch (working tree, no version bump — see below). Each finding keeps its
+number; the guard column names the test that now fails if the fix regresses.
+
+| # | Fix | Guard |
+|---|-----|-------|
+| 1 | `clear()` resets `promptCut` and re-renders the counter; the counter drops its text when it hides, so no reset can leave the previous draft's count in the markup | `panel-lifecycle.test.mjs` — "a cleared session does not leave the previous draft's counter on screen" |
+| 2 | Light `--secondary` alpha `.64` → `.78`; `--tertiary` → `#6e6e73` light / alpha `.58` dark; all four accents re-solved for both roles in both themes (light deepened, dark lightened, `--accent-ink` now defined per theme); `--danger-ink` and a new `--warning-ink` for the limit counter; the check/alert/send glyphs are masks driven by their ink instead of a baked-in white stroke | `palette-contrast.test.mjs` — every pair, both themes, four accents |
+| 3 | Option rows are a `div[role="listitem"]` wrapping the button; list headings and the empty note are `role="presentation"`, so the list contains only list items and the button keeps its role | `panel-aria.test.mjs` (static markup) + `panel-lifecycle.test.mjs` — "option rows keep their button semantics inside the list" |
+| 4 | `#confirm-dialog` names itself from its existing title/description ids | `panel-aria.test.mjs` — "every dialog can be announced by name" (verified to fail on the old markup) |
+| 5 | `action()` no longer clears a coded error notice; the error stays until the user minimizes it, as the surrounding comment always claimed | covered by the notice lifecycle in `panel-lifecycle.test.mjs` |
+| 6 | The transcript scroller draws a solid `--accent` ring inset by 3px instead of no ring at all | `palette-contrast.test.mjs` (accent vs surface ≥ 3:1) |
+| 7 | A clarification card takes the live question before refreshing, so labels and per-option availability follow Arena while the card stays on screen | `live-view.test.mjs` (behaviour unchanged, no longer frozen) |
+| 8 | `copyText` remembers the author's tooltip and restores it with the label, so a failure message does not outlive the failure | — |
+| 9 | `body.floating-view` removed (no rule or code ever read it) | — |
+| 10 | Outcome wording moved into one `OUTCOMES` table in `conversation-view.js`; identical strings | `conversation-view.test.mjs` (unchanged expectations) |
+
+**Two changes beyond the letter of the findings**, both in the same defect class and reported here so
+they can be reverted on their own:
+
+- The composer's focus glow was 14% accent (about 1.2:1 — present, but not perceivable). It keeps the
+  glow and gains a 1.5px accent ring inside it, so the panel's primary input has a visible focus
+  indicator like the scroller now does.
+- `test/stylesheet.test.mjs` also checks that every `icons/…` URL the stylesheet references exists,
+  because moving the three glyphs into `mask` made a mistyped path fail silently.
+
+**Left as it is, deliberately:** `--grouped` is still declared and unused (the fix list did not
+include it); the status-pill dots keep their current colours — the state is worded next to them, so
+colour is not the only signal; the `2.8.2`/`2.8.3` prose references in `docs/architecture.md`,
+`docs/IMPLEMENTATION-STATUS.md` and `README.md` are untouched.
+
+**No version bump.** AGENTS.md treats the version as a wire protocol and this change touches neither
+the adapter contract nor the panel⇄tab message shapes: an existing 2.9.0 content script pairs with
+this panel unchanged. Bumping would force every user to reload their Arena tabs for no reason — so the
+call is left to whoever ships it, together with a `CHANGELOG.md` entry.
+
+**Still unverified here:** `npm run test:browser` (Chromium cannot be downloaded in this sandbox), the
+rendered result in a real compositor, and the floating window's geometry. The palette, the ARIA
+contract, the mask glyphs and the two panel-wide regressions are covered by Node/jsdom tests; the
+visual result is what the dev preview is for.

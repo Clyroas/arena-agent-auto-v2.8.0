@@ -33,7 +33,10 @@ The suites cover the pure helpers plus the paths that used to be untestable:
 | `rich-view.test.mjs` | Markdown/code rendering |
 | `screenshot.test.mjs` | Capture pipeline maths: slicing, caps, stitching decisions |
 | `preferences.test.mjs` | Whitelist-normalization of theme/text-size/accent prefs |
-| `stylesheet.test.mjs` | The CSS "linter": custom-property typos, animations pointing at missing keyframes, unbalanced braces, motion only on `transform`/`opacity`/colour, and the reduced-motion escape hatch |
+| `stylesheet.test.mjs` | The CSS "linter": custom-property typos, animations pointing at missing keyframes, unbalanced braces, motion only on `transform`/`opacity`/colour, the reduced-motion escape hatch, and every `icons/…` URL resolving to a packaged file |
+| `panel-aria.test.mjs` | The panel's accessibility contract in the real markup: every dialog has a resolvable name, no control has its role replaced by a structural one, `aria-*` id references resolve, ids are unique, and controls carry a name |
+| `palette-contrast.test.mjs` | The design system's colour bar: every text and state-graphic pair the panel renders is checked against WCAG AA (4.5:1 text, 3:1 graphics) for both themes and all four accents, with translucent surfaces composited as Chrome composites them |
+| `panel-lifecycle.test.mjs` | The real panel bootstrap and handlers (attachments, recovery, model confirmation, pickers) plus the panel-wide regressions: a cleared session leaves no draft counter behind, and option rows keep their button semantics inside the list |
 | `version-sync.test.mjs` | Every version anchor matches the manifest; the manifest references only files that exist; permissions and CSP are exactly as intended |
 | `agent-skills.test.mjs` | Vendored addyosmani/agent-skills pack: 25 skills, frontmatter names, shared checklists, resolving `references/` links, not packed |
 
