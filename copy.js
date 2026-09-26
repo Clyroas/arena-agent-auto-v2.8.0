@@ -3,6 +3,8 @@
 export async function copyText(text, button) {
   const label = button.dataset.label || button.textContent;
   button.dataset.label = label;
+  // Keep the author's tooltip, so a failure message does not outlive the failure.
+  if (button.dataset.title === undefined) button.dataset.title = button.title;
   clearTimeout(button.copyTimer);
   try {
     await navigator.clipboard.writeText(String(text));
@@ -11,5 +13,5 @@ export async function copyText(text, button) {
     button.textContent = 'Copy failed'; button.dataset.state = 'error';
     button.title = 'Chrome did not allow the copy. Select the text and press Ctrl+C (⌘C on Mac).';
   }
-  button.copyTimer = setTimeout(() => { button.textContent = label; delete button.dataset.state; }, 1600);
+  button.copyTimer = setTimeout(() => { button.textContent = label; delete button.dataset.state; button.title = button.dataset.title; }, 1600);
 }

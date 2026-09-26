@@ -21,7 +21,9 @@ export class LiveView {
     const item = { card, question, buttons: [], selected: checked >= 0 ? checked : null, mode: 'option', submitted: false };
     const refresh = () => {
       const locked = item.locked || item.submitted;
-      item.buttons.forEach((button, index) => { button.disabled = locked || question.options[index].disabled; button.setAttribute('aria-checked', String(item.mode === 'option' && item.selected === index)); });
+      // Read the live question, not the one captured when the card was built: Arena enables options and
+      // rewords them while the card stays on screen (render() assigns item.question before refreshing).
+      item.buttons.forEach((button, index) => { button.disabled = locked || item.question.options[index].disabled; button.setAttribute('aria-checked', String(item.mode === 'option' && item.selected === index)); });
       if (item.input) item.input.disabled = locked;
       item.submit.disabled = locked || (item.mode === 'custom' ? !item.input?.value.trim() : item.selected === null);
       item.submit.textContent = item.mode === 'custom' ? 'Submit custom answer' : 'Submit selected answer';
@@ -138,6 +140,7 @@ export class LiveView {
     for (const question of live.questions || []) {
       let item = this.cards.get(question.token);
       if (!item) { item = this.createCard(question, turn.id); this.cards.set(question.token, item); this.questions.append(item.card); }
+      item.question = question; // labels, descriptions and availability follow Arena while the card lives
       item.locked = !active || question.readOnly || question.busy || !!question.answerState;
       if (question.answerState || question.reason || !active) item.status.textContent = question.answerState || question.reason || 'Tracking stopped. Handle this question in Arena.';
       item.refresh();

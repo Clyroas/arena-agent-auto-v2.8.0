@@ -46,6 +46,7 @@ async function open({ captureLink = async () => {}, send = async () => {}, picke
     setModel(expected, actual) { requestedModel = expected; client.model = actual; render(); },
     setTurn(turn) { turns.push(turn); pending = turn; state = 'waiting'; },
     get current() { return { staged, pending, turns, state, shotOperation, historyRequest }; },
+    countDraft(mode, cut) { if (mode === 'cut') promptCut = cut; renderPromptCount(); },
     get pickerSession() { return pickerAction; }
   };`);
   await tick();
@@ -346,5 +347,51 @@ test('an unavailable option is shown disabled and cannot be picked', async () =>
     assert.equal(rows[1].disabled, true);
     rows[1].click();
     assert.equal(calls.length, 1, 'a disabled option never reaches the tab');
+  } finally { page.close(); }
+});
+
+// ---- Panel-wide UI regressions (2.9.1) -----------------------------------------------------------
+// Both of these shipped in 2.9.0 and neither was a behavioural bug: the panel worked, it just said
+// something untrue after a reset and announced its option rows as the wrong kind of thing.
+
+test('a cleared session does not leave the previous draft’s counter on screen', async () => {
+  const page = await open();
+  try {
+    const prompt = page.w.document.getElementById('prompt');
+    const counter = page.w.document.getElementById('prompt-count');
+    prompt.value = 'x'.repeat(25000); // over 80% of the limit: the counter appears
+    page.w.testPanel.countDraft();
+    assert.equal(counter.hidden, false);
+    assert.match(counter.textContent, /25,000 \/ 30,000/);
+    page.ui.clear();
+    assert.equal(prompt.value, '', 'clear() empties the composer');
+    assert.equal(counter.hidden, true, 'the counter belongs to the draft, not to the panel');
+    assert.equal(counter.textContent, '');
+    // Send clears the draft too, and it already reset the counter; keep that contract.
+    page.ui.countDraft('cut', 1234);
+    assert.equal(counter.hidden, false);
+    assert.match(counter.textContent, /your paste was cut: 1,234/);
+    page.ui.clear();
+    assert.equal(counter.hidden, true);
+    assert.equal(counter.textContent, '');
+  } finally { page.close(); }
+});
+
+test('option rows keep their button semantics inside the list', async () => {
+  const calls = [];
+  const page = await open({ repoPickers: PICKERS, picker: (...args) => calls.push(args) });
+  try {
+    page.w.document.getElementById('repo-chip').click();
+    page.ui.handleEvent({ type: 'PICKER_STATE', actionId: calls[0][0], kind: 'repo', phase: 'open',
+      options: [{ label: 'Clyroas/arena-agent-auto-v2.8.0', meta: '', disabled: false }], query: '' });
+    const row = page.w.document.querySelector('#picker-list [role="listitem"]');
+    assert.ok(row, 'each option is a list item');
+    const button = row.querySelector('button.model-option');
+    assert.ok(button, 'the list item contains the control, rather than being the control');
+    assert.equal(button.getAttribute('role'), null, 'the button keeps its own role');
+    // The list only contains list items: its own headings and empty notes stay out of the semantics.
+    for (const child of page.w.document.getElementById('picker-list').children)
+      assert.ok(child.getAttribute('role') === 'listitem' || child.getAttribute('role') === 'presentation',
+        `the list must not contain ${child.tagName.toLowerCase()} with role ${child.getAttribute('role')}`);
   } finally { page.close(); }
 });

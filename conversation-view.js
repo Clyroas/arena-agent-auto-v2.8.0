@@ -1,6 +1,16 @@
 import { LiveView } from './live-view.js';
 import { renderRich, richToMarkdown } from './rich-view.js';
 import { copyText } from './copy.js';
+// What a finished-but-not-answered turn says for itself. `imported-*` states come from the read-only
+// history import, where the page held something other than one clear reply.
+const OUTCOMES = {
+  cancelled: 'Tracking stopped in this panel. The Arena task may continue.',
+  error: 'No reply captured. Check the Arena tab.',
+  'imported-no-reply': 'No reply text is on the page for this message (it may have been only tool activity or a question). Read it in Arena.',
+  'imported-ambiguous': 'Several separate replies are on the page for this message, so none was picked. Read it in Arena.',
+  'imported-pair': 'Arena answered this message with two responses (Battle in Direct). Read which one continued in Arena.',
+  'imported-unreadable': 'This message’s text could not be read from the page.'
+};
 // Presentation only: no tab, transport, credential, or storage access.
 export class ConversationView {
   constructor(doc = document, onAnswer = () => {}, onChoose = () => {}) {
@@ -113,11 +123,9 @@ export class ConversationView {
       if (!turn.reply && item.assistant.isConnected) item.assistant.remove();
       if (item.status !== turn.status) {
         item.article.dataset.state = turn.status;
-        const outcome = turn.outcomeText ? turn.outcomeText : turn.status === 'cancelled' ? 'Tracking stopped in this panel. The Arena task may continue.' : turn.status === 'error' && pending?.id !== turn.id ? 'No reply captured. Check the Arena tab.'
-          : turn.status === 'imported-no-reply' ? 'No reply text is on the page for this message (it may have been only tool activity or a question). Read it in Arena.'
-          : turn.status === 'imported-ambiguous' ? 'Several separate replies are on the page for this message, so none was picked. Read it in Arena.'
-          : turn.status === 'imported-pair' ? 'Arena answered this message with two responses (Battle in Direct). Read which one continued in Arena.'
-          : turn.status === 'imported-unreadable' ? 'This message’s text could not be read from the page.' : '';
+        // One wording per state, in one table: an explicit reason wins, and a live error explains itself
+        // in the pending card above rather than repeating here.
+        const outcome = turn.outcomeText || (turn.status === 'error' && pending?.id === turn.id ? '' : OUTCOMES[turn.status]) || '';
         item.outcome.textContent = outcome; item.outcome.hidden = !outcome;
         item.status = turn.status;
       }

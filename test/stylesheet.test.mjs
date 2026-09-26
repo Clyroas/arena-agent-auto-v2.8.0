@@ -136,3 +136,10 @@ test('the motion layer does not touch the layout the transcript depends on', () 
   const banned = /(?:^|[;{])\s*(width|height|margin|padding|top|left|right|bottom|font-size|line-height)\s*:/;
   for (const [name, body] of keyframeBlocks(css)) assert.doesNotMatch(body, banned, `${name} animates a layout property`);
 });
+
+test('every icon the stylesheet references exists', () => {
+  // A renamed or mistyped icon fails silently: the rule still matches and simply paints nothing.
+  const referenced = new Set([...raw.matchAll(/url\(["']?(icons\/[^"')]+)["']?\)/g)].map(match => match[1]));
+  assert.ok(referenced.size >= 4, 'the panel uses its packaged UI icons');
+  for (const file of referenced) assert.doesNotThrow(() => readFileSync(new URL(`../${file}`, import.meta.url)), `${file} is referenced by panel.css but missing`);
+});
