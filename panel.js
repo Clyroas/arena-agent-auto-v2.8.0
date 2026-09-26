@@ -87,7 +87,9 @@ function renderPromptCount() {
   const length = $('prompt').value.length, box = $('prompt-count');
   const show = length >= PROMPT_LIMIT * 0.8 || promptCut > 0;
   box.hidden = !show;
-  if (!show) return;
+  // Nothing to report: drop the text as well as the node, so a reset can never leave the previous
+  // draft's count sitting invisibly in the markup.
+  if (!show) { box.textContent = ''; return; }
   box.dataset.full = String(length >= PROMPT_LIMIT);
   box.textContent = `${length.toLocaleString('en-US')} / ${PROMPT_LIMIT.toLocaleString('en-US')} characters`
     + (promptCut ? ` · your paste was cut: ${promptCut.toLocaleString('en-US')} characters did not fit. Send the rest in a follow-up message or attach it as a .txt file.` : '');
@@ -210,7 +212,8 @@ function clear() {
   tab = null; pending = null; turns = []; state = 'disconnected'; requestedModel = '';
   $('attachment-status').textContent = ''; $('shot-status').textContent = '';
   $('connection-details').open = true; setSheet(true);
-  $('prompt').value = ''; $('confirmed').checked = false; $('authorize').checked = false;
+  $('prompt').value = ''; promptCut = 0; renderPromptCount(); // the counter belongs to the draft, not to the panel
+  $('confirmed').checked = false; $('authorize').checked = false;
   for (const file of staged) if (file.url) URL.revokeObjectURL(file.url);
   staged.length = 0; renderAttachments();
   notice(); render();
@@ -250,7 +253,11 @@ function renderModelChip() {
   chip.dataset.kind = direct ? 'direct' : 'agent';
   chip.title = pending ? 'Wait for the current reply before switching' : 'Choose a Direct model or Agent Mode (opens a new chat in Arena) · Ctrl/⌘+K';
 }
-function modelGroup(text) { const label = document.createElement('p'); label.className = 'model-group'; label.textContent = text; return label; }
+function modelGroup(text) {
+  const label = document.createElement('p'); label.className = 'model-group'; label.textContent = text;
+  // The list's non-option content stays out of the list semantics the rows carry (see optionFor).
+  label.setAttribute('role', 'presentation'); return label;
+}
 function renderModelList() {
   const direct = client?.pageKind === 'direct', models = client?.models || [];
   $('mode-direct').setAttribute('aria-pressed', String(direct)); $('mode-agent').setAttribute('aria-pressed', String(!direct));
@@ -265,19 +272,24 @@ function renderModelList() {
   const recent = recentNames.map(n => shown.find(m => m.name.toLowerCase() === n)).filter(Boolean);
   const rest = recent.length ? shown.filter(m => !recent.includes(m)) : shown;
   const optionFor = model => {
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option'; button.setAttribute('role', 'listitem');
+    // One row per option: the list owns the row, the button keeps its own semantics. `role="listitem"`
+    // directly on a <button> would replace the button role in the accessibility tree, so these rows used
+    // to be announced as list items with nothing to activate.
+    const row = document.createElement('div'); row.className = 'model-row'; row.setAttribute('role', 'listitem');
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option';
     button.dataset.name = model.name; button.setAttribute('aria-current', String(model.name.toLowerCase() === current));
     const name = document.createElement('span'); name.className = 'model-option-name'; name.textContent = model.name;
     const meta = document.createElement('span'); meta.className = 'model-option-meta';
     meta.textContent = [model.org, model.image ? 'images' : '', model.file ? 'files' : ''].filter(Boolean).join(' · ');
     button.append(name, meta);
     button.addEventListener('click', () => switchChat('direct', model.name));
-    return button;
+    row.append(button);
+    return row;
   };
   $('model-list').replaceChildren(...(recent.length
     ? [modelGroup('Recent'), ...recent.map(optionFor), modelGroup('All models'), ...rest.slice(0, 200).map(optionFor)]
     : rest.slice(0, 200).map(optionFor)));
-  if (!shown.length && models.length) { const empty = document.createElement('p'); empty.className = 'model-empty'; empty.textContent = 'No model matches that search.'; $('model-list').append(empty); }
+  if (!shown.length && models.length) { const empty = document.createElement('p'); empty.className = 'model-empty'; empty.setAttribute('role', 'presentation'); empty.textContent = 'No model matches that search.'; $('model-list').append(empty); }
 }
 function openModelDialog() {
   if ($('model-chip').disabled) return;
@@ -378,8 +390,10 @@ function renderPickerBar() {
   setChip('repo'); setChip('branch');
 }
 function pickerOptionRow(option, kind, phase) {
+  // Same row/button split as the model list: the row is the list item, the button is the control.
+  const row = document.createElement('div'); row.className = 'model-row'; row.setAttribute('role', 'listitem');
   const button = document.createElement('button');
-  button.type = 'button'; button.className = 'model-option'; button.setAttribute('role', 'listitem');
+  button.type = 'button'; button.className = 'model-option';
   const current = client?.repoPickers?.[kind]?.value || '';
   button.setAttribute('aria-current', String(option.label === current));
   button.dataset.name = option.label;
@@ -389,7 +403,8 @@ function pickerOptionRow(option, kind, phase) {
   button.disabled = !!option.disabled || phase !== 'open';
   button.title = option.disabled ? 'Arena lists this option as unavailable right now' : `Switch Arena’s ${kind === 'repo' ? 'repository' : 'branch'} to ${option.label}`;
   button.addEventListener('click', () => pickFromDialog(option.label));
-  return button;
+  row.append(button);
+  return row;
 }
 function renderPickerDialog() {
   if (!pickerAction || !$('picker-dialog').open) return;
@@ -400,7 +415,7 @@ function renderPickerDialog() {
   const query = $('picker-search').value.trim().toLowerCase();
   const shown = options.filter(option => !query || option.label.toLowerCase().includes(query) || (option.meta || '').toLowerCase().includes(query));
   $('picker-list').replaceChildren(...shown.map(option => pickerOptionRow(option, kind, phase)));
-  if (!shown.length && options.length) { const empty = document.createElement('p'); empty.className = 'model-empty'; empty.textContent = 'No option matches that search.'; $('picker-list').append(empty); }
+  if (!shown.length && options.length) { const empty = document.createElement('p'); empty.className = 'model-empty'; empty.setAttribute('role', 'presentation'); empty.textContent = 'No option matches that search.'; $('picker-list').append(empty); }
 }
 function openPickerDialog(kind) {
   const chip = $(`${kind}-chip`);
@@ -771,7 +786,9 @@ async function connect(id) {
 function action(id, fn) {
   $(id).addEventListener('click', async () => {
     if (busy || switching) return;
-    busy = true; notice(); render(); const operation = ++actionId;
+    // A coded error stays until the user minimizes it (see noticeKind/setNoticeOpen above): an action
+    // click must not wipe the message the user is still reading. Anything else makes way for the result.
+    busy = true; if ($('notice').dataset.kind !== 'error') notice(); render(); const operation = ++actionId;
     try { await fn(); }
     catch (error) {
       // Never convert a failure into manual mode or request pasted replies.

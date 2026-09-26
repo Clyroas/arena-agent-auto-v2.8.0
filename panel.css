@@ -10,8 +10,8 @@
   --surface: #ffffff;
   --grouped: #f2f2f7;
   --label: #1d1d1f;
-  --secondary: rgba(60, 60, 67, .64);
-  --tertiary: rgba(60, 60, 67, .38);
+  --secondary: rgba(60, 60, 67, .78);
+  --tertiary: #6e6e73;
   --separator: rgba(60, 60, 67, .16);
   --fill: rgba(118, 118, 128, .12);
   --fill-2: rgba(118, 118, 128, .07);
@@ -20,10 +20,11 @@
   --glass-border: rgba(0, 0, 0, .07);
   --sheet: rgba(242, 242, 247, .94);
   --shadow-lg: 0 10px 34px rgba(0, 0, 0, .10), 0 1px 3px rgba(0, 0, 0, .06);
-  --green: #34c759; --red: #ff3b30; --orange: #ff9500; --gray: #8e8e93;
+  --green: #279f45; --red: #ff3b30; --orange: #ff9500; --gray: #8e8e93;
   --danger-ink: #d70015;
+  --warning-ink: #8f4a00;
   --switch-off: rgba(120, 120, 128, .20);
-  --accent: #007aff;
+  --accent: #0062cc;
   --accent-ink: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --notice-bg: color-mix(in srgb, var(--orange) 14%, var(--surface));
@@ -39,7 +40,7 @@
   --grouped: #000000;
   --label: #f5f5f7;
   --secondary: rgba(235, 235, 245, .62);
-  --tertiary: rgba(235, 235, 245, .34);
+  --tertiary: rgba(235, 235, 245, .58);
   --separator: rgba(84, 84, 88, .55);
   --fill: rgba(118, 118, 128, .26);
   --fill-2: rgba(118, 118, 128, .16);
@@ -48,19 +49,21 @@
   --glass-border: rgba(255, 255, 255, .09);
   --sheet: rgba(22, 22, 24, .94);
   --shadow-lg: 0 10px 34px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .35);
-  --green: #30d158; --red: #ff453a; --orange: #ff9f0a; --gray: #98989d;
-  --danger-ink: #ff6961;
+  --green: #2ba84a; --red: #ff453a; --orange: #ff9f0a; --gray: #98989d;
+  --danger-ink: #ff7d75;
+  --warning-ink: #ff9f0a;
   --switch-off: rgba(120, 120, 128, .32);
-  --accent: #0a84ff;
+  --accent: #43a1ff;
+  --accent-ink: #0a0a0c;
   --backdrop: rgba(0, 0, 0, .48);
 }
 /* Accent choices (values kept for saved-preference compatibility). */
-:root[data-accent="green"] { --accent: #248a3d; }
+:root[data-accent="green"] { --accent: #1f7534; }
 :root[data-accent="violet"] { --accent: #8944ab; }
-:root[data-accent="amber"] { --accent: #c93400; }
-:root[data-theme="dark"][data-accent="green"] { --accent: #2f9e4f; }
-:root[data-theme="dark"][data-accent="violet"] { --accent: #9d4edd; }
-:root[data-theme="dark"][data-accent="amber"] { --accent: #e8590c; }
+:root[data-accent="amber"] { --accent: #bd3100; }
+:root[data-theme="dark"][data-accent="green"] { --accent: #50ae6b; }
+:root[data-theme="dark"][data-accent="violet"] { --accent: #bb85e8; }
+:root[data-theme="dark"][data-accent="amber"] { --accent: #ed7c3f; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -178,7 +181,10 @@ select option { background: var(--surface); color: var(--label); }
   padding: calc(var(--toolbar-h) + 18px) 16px calc(var(--composer-h) + 22px);
   scroll-padding-top: calc(var(--toolbar-h) + 12px); scroll-padding-bottom: calc(var(--composer-h) + 12px);
 }
-.chat-scroll:focus-visible { outline: none; }
+/* The scroller is focusable so the transcript can be scrolled from the keyboard. It draws its ring
+   inset: an outer outline would be clipped at the panel edges, and the top strip sits under the glass
+   toolbar — the three visible edges still mark the focused region. */
+.chat-scroll:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
 .chat-column { max-width: 720px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; }
 .chat-column > * { flex: none; }
 
@@ -338,7 +344,7 @@ body:not([data-connected="false"]) #empty-connect { display: none; }
   background: var(--glass-strong); border: .5px solid var(--glass-border); box-shadow: var(--shadow-lg);
   transition: box-shadow .2s;
 }
-.arena-composer:focus-within { box-shadow: 0 0 0 3.5px var(--accent-soft), var(--shadow-lg); }
+.arena-composer:focus-within { box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 3.5px var(--accent-soft), var(--shadow-lg); }
 body[data-working="true"] .arena-composer::before {
   content: ""; position: absolute; inset: -1.5px; border-radius: 25.5px; padding: 1.5px; pointer-events: none;
   background: conic-gradient(from var(--glow-angle), #0a84ff, #bf5af2, #ff375f, #ff9f0a, #64d2ff, #0a84ff);
@@ -365,8 +371,8 @@ body[data-working="true"] .arena-composer::before {
   font-size: 0; color: transparent; overflow: hidden; background: var(--accent);
 }
 .send-button::before {
-  content: ""; position: absolute; inset: 0;
-  background: url("icons/ui/send.svg") center / 16px no-repeat;
+  content: ""; position: absolute; inset: 0; background: var(--accent-ink);
+  -webkit-mask: url("icons/ui/send.svg") center / 16px no-repeat; mask: url("icons/ui/send.svg") center / 16px no-repeat;
 }
 .send-button:disabled { opacity: .3; }
 .composer-note { max-width: 720px; margin: 6px auto 0; font-size: 10.5px; color: var(--tertiary); text-align: center; line-height: 1.35; }
@@ -520,7 +526,7 @@ dialog::backdrop { background: var(--backdrop); }
 .model-chip[hidden] { display: none; }
 .model-chip:hover:not(:disabled) { background: var(--fill); }
 .model-chip:disabled { opacity: .55; cursor: default; }
-.model-mode { flex: none; padding: 2px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; letter-spacing: .01em; color: #fff; background: var(--accent); }
+.model-mode { flex: none; padding: 2px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; letter-spacing: .01em; color: var(--accent-ink); background: var(--accent); }
 .model-chip[data-kind="agent"] .model-mode { background: var(--secondary); }
 .model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
 .model-chip svg { flex: none; width: 11px; height: 11px; color: var(--secondary); }
@@ -640,7 +646,7 @@ dialog.model-dialog { width: 380px; max-width: calc(100% - 24px); text-align: le
 
 /* v2.8.0 — message length near Arena's 30,000-character limit. */
 .prompt-count { margin: 6px 4px 0; font-size: 11.5px; color: var(--secondary); }
-.prompt-count[data-full="true"] { color: var(--orange); }
+.prompt-count[data-full="true"] { color: var(--warning-ink); }
 .prompt-count[hidden] { display: none; }
 
 /* v2.8.0 — copy buttons (reply + code blocks). */
