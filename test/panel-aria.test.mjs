@@ -92,6 +92,19 @@ test('the conversation is the first surface, and overlays that cover it are in t
   assert.ok(dock?.querySelector('#notice-dot'), 'the minimized notice belongs to that same dock');
 });
 
+test('the toolbar reconnect control is named, starts hidden, and lives on both surfaces', () => {
+  const surfaces = { 'panel.html': document, 'floating.html': new JSDOM(readFileSync(new URL('../floating.html', import.meta.url), 'utf8')).window.document };
+  for (const [file, doc] of Object.entries(surfaces)) {
+    const button = doc.getElementById('reconnect-button');
+    assert.ok(button, `${file} must carry the toolbar reconnect control`);
+    const name = button.getAttribute('aria-label') || button.textContent.trim() || button.getAttribute('title') || '';
+    assert.ok(name, `${file}#reconnect-button would be announced with no name`);
+    assert.equal(button.hasAttribute('aria-controls'), false, 'the reconnect control does not toggle the settings sheet');
+    assert.equal(button.hasAttribute('hidden'), true, 'it starts hidden: reconnect is only offered from the error state');
+    assert.ok(button.querySelector('svg[aria-hidden="true"]'), 'the glyph is decorative; the name carries the meaning');
+  }
+});
+
 test('the floating window keeps the same dialog name and dock structure', () => {
   const floating = new JSDOM(readFileSync(new URL('../floating.html', import.meta.url), 'utf8')).window.document;
   const dialog = floating.getElementById('confirm-dialog');

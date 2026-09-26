@@ -1,34 +1,42 @@
 # Task List: Pill Reconnect + Picker Chips Polish + False Security-Check Fix
 
-Companion to `tasks/plan.md`. Checkboxes track implementation; nothing is checked —
-this is the plan awaiting human review.
+Companion to `tasks/plan.md`. Checkboxes track implementation; Task 1 is done — the remaining
+tasks are the plan awaiting human review.
 
-## Task 1: Pill reconnects from `error` state
+## Task 1: Toolbar reconnect button from `error` state — DONE
 
-**Description:** Route the header status-pill click to the existing reconnect flow
-(the same `action('reconnect')` path as Settings → Reconnect, including its
-same-conversation confirmations) when `state === 'error'`, and give the pill a
-distinct small red treatment in that state. All other states keep opening Settings.
+**Description:** A compact reconnect button in the toolbar (between the status pill and the gear),
+shown only while the session is in `error` state with a known Arena tab and nothing else running.
+Clicking it runs the **existing** reconnect flow (Settings → Reconnect), including its
+same-conversation confirmations and its "nothing is resent" guarantees.
+
+**Design change from the original plan:** the human chose a separate small button over reusing the
+status pill (the plan's "no new element" decision). The ≤380px crowding risk was stated with the
+question and accepted; the pill keeps opening Settings in every state, so the two affordances never
+compete — the new button only exists when a reconnect is actually possible.
 
 **Acceptance criteria:**
-- [ ] Clicking the pill in `error` state runs the existing reconnect action (same confirmations, same "nothing resent" guarantees); clicking it in any other state opens Settings as today
-- [ ] In `error` state the pill is visibly red with a "Reconnect…" tooltip/label affordance, in light and dark themes, at 360px width
-- [ ] `floating.html` surface behaves identically (same script, mirrored markup)
+- [x] Clicking the button in `error` state (known tab, idle) runs the existing reconnect action (same confirmations, same "nothing resent" guarantees); the button is hidden in every other state and while busy
+- [x] The button is visibly red (the pill's error treatment) with a ↻ glyph and a "Reconnect to the Arena tab" name, in light and dark themes
+- [x] `floating.html` surface behaves identically (same script, mirrored markup)
+- [x] The pill and the gear still open Settings in the error state; the reconnect flow is shared via `runAction`, not re-implemented per control
 
 **Verification:**
-- [ ] Tests pass: `node --test test/panel-aria.test.mjs test/panel-lifecycle.test.mjs` (extended with pill-click routing cases)
-- [ ] Checks pass: `npm run check`
-- [ ] Manual check: force an error state (e.g. close the Arena tab), click the red pill, confirm reattach offers appear and nothing is resent
+- [x] Tests pass: `node --test test/panel-aria.test.mjs test/panel-lifecycle.test.mjs` (extended with button-visibility, click-routing, confirmation and no-resend cases)
+- [x] Checks pass: `npm run check` (245 tests, ESLint clean) + `npm run package:extension` (allow-list unchanged)
+- [ ] Manual check on a live Arena tab: force an error state (e.g. close the Arena tab), click the toolbar button, confirm the reattach offer appears and nothing is resent — needs a live tab, outside this environment
+- [ ] `npm run test:browser` not runnable here: Playwright's Chromium executable is not installed in this sandbox (fails identically on the pristine tree)
 
 **Dependencies:** None
 
-**Files likely touched:**
-- `panel.js` (pill click handler ~L60, `render()` pill title ~L158)
-- `panel.css` (`.status-pill` error state ~L155)
-- `panel.html`, `floating.html` (pill tooltip/ARIA text, only if markup must change)
-- `test/panel-aria.test.mjs` and/or `test/panel-lifecycle.test.mjs` (new cases)
+**Files touched:**
+- `panel.js` (`canReconnect` predicate, `render()` visibility line, `runAction` extraction, shared `reconnect` flow, toolbar click handler)
+- `panel.html`, `floating.html` (the button, mirrored markup)
+- `panel.css` (`.toolbar-button.reconnect` red treatment)
+- `test/panel-aria.test.mjs`, `test/panel-lifecycle.test.mjs` (new cases + harness `setState`/`watch` hooks)
+- `CHANGELOG.md` (Unreleased note)
 
-**Estimated scope:** Small: 3–4 files (+2 test/markup parity)
+**Estimated scope:** Small: 4 files (+2 test/markup parity)
 
 ## Task 2: Pill reattach from `disconnected` + guards, ARIA, docs
 

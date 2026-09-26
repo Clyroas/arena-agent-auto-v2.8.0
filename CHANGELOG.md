@@ -4,6 +4,8 @@
 
 Interface revamp on 2.9.0. No protocol change — the version stays 2.9.0, so Arena tabs do not need a reload for this panel-only update.
 
+- A **Reconnect** button joins the toolbar whenever the session is stopped on a known Arena tab (`error` state, nothing else running), and runs the same reconnect flow as Settings → Reconnect — the same same-conversation confirmations, and nothing is ever resent. It stays hidden in every other state, so the toolbar only grows when a reconnect is actually possible; the status pill and the gear keep opening Settings.
+
 - The conversation is the first surface. Connection setup opens from **Set up connection**, the status pill, or after disconnect, instead of covering the chat on launch.
 - The mode chip and a minimized notice sit in the composer dock. They used to float above it, outside the height the transcript measures, and could cover the last reply and the jump control.
 - Working, empty, and assistant marks use the accent you chose. The spinning rainbow edge is gone, so a live reply stays readable and the focus ring is the thing that moves.
