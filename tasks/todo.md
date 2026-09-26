@@ -1,218 +1,227 @@
-# Task List: Pill Reconnect + Picker Chips Polish + False Security-Check Fix
+# Task List: Apple-Inspired UI/UX — Complete Polish Pass
 
-Companion to `tasks/plan.md`. Checkboxes track implementation; Task 1 is done — the remaining
-tasks are the plan awaiting human review.
+Companion to `tasks/plan.md` (spec: `docs/specs/apple-ui-polish.md`). Direction (a) approved by the
+human 2026-09-27: polish/complete the existing Apple-style UI; all Phases 0–6 in one run, with
+checkpoints. No IBM Plex bundling; system font stacks stay. Supersedes the previous working list.
 
-## Task 1: Toolbar reconnect button from `error` state — DONE
+## Task 1: Generated floating.html + drift test (Phase 0, zero visual change)
 
-**Description:** A compact reconnect button in the toolbar (between the status pill and the gear),
-shown only while the session is in `error` state with a known Arena tab and nothing else running.
-Clicking it runs the **existing** reconnect flow (Settings → Reconnect), including its
-same-conversation confirmations and its "nothing is resent" guarantees.
-
-**Design change from the original plan:** the human chose a separate small button over reusing the
-status pill (the plan's "no new element" decision). The ≤380px crowding risk was stated with the
-question and accepted; the pill keeps opening Settings in every state, so the two affordances never
-compete — the new button only exists when a reconnect is actually possible.
+**Description:** Add `scripts/gen-floating.mjs` that derives `floating.html` from `panel.html`,
+encoding the known panel↔floating differences (e.g. `body.floating-view`, window-specific head/
+script wiring) as explicit parameters. Commit the generated output byte-for-byte and add a drift
+test so any hand-edit of `floating.html` fails the suite. Pattern precedent:
+`scripts/build-skill-presets.mjs` + `test/skill-presets.test.mjs`.
 
 **Acceptance criteria:**
-- [x] Clicking the button in `error` state (known tab, idle) runs the existing reconnect action (same confirmations, same "nothing resent" guarantees); the button is hidden in every other state and while busy
-- [x] The button is visibly red (the pill's error treatment) with a ↻ glyph and a "Reconnect to the Arena tab" name, in light and dark themes
-- [x] `floating.html` surface behaves identically (same script, mirrored markup)
-- [x] The pill and the gear still open Settings in the error state; the reconnect flow is shared via `runAction`, not re-implemented per control
+- [ ] `node scripts/gen-floating.mjs` regenerates `floating.html` identical to the committed file
+- [ ] Drift test fails when `floating.html` diverges from generator output
+- [ ] DOM ids unchanged on both surfaces; `test/package.test.mjs` id-parity stays green
+- [ ] `.agents/`-style exclusion holds: generator script is NOT packaged (`extension-files.json` unchanged)
 
 **Verification:**
-- [x] Tests pass: `node --test test/panel-aria.test.mjs test/panel-lifecycle.test.mjs` (extended with button-visibility, click-routing, confirmation and no-resend cases)
-- [x] Checks pass: `npm run check` (245 tests, ESLint clean) + `npm run package:extension` (allow-list unchanged)
-- [ ] Manual check on a live Arena tab: force an error state (e.g. close the Arena tab), click the toolbar button, confirm the reattach offer appears and nothing is resent — needs a live tab, outside this environment
-- [ ] `npm run test:browser` not runnable here: Playwright's Chromium executable is not installed in this sandbox (fails identically on the pristine tree)
+- [ ] Tests pass: `node --test test/package.test.mjs test/floating-drift.test.mjs` (new)
+- [ ] Checks pass: `npm run check` (sandbox: `node --test test/*.test.mjs`) — 245+ green
+- [ ] Manual check: open both surfaces via `dev/preview` — no rendering difference vs baseline
 
 **Dependencies:** None
+**Files likely touched:** `scripts/gen-floating.mjs` (new), `floating.html`, `test/` (new drift test), `package.json` (script entry if needed)
+**Estimated scope:** Medium: 3–4 files
 
-**Files touched:**
-- `panel.js` (`canReconnect` predicate, `render()` visibility line, `runAction` extraction, shared `reconnect` flow, toolbar click handler)
-- `panel.html`, `floating.html` (the button, mirrored markup)
-- `panel.css` (`.toolbar-button.reconnect` red treatment)
-- `test/panel-aria.test.mjs`, `test/panel-lifecycle.test.mjs` (new cases + harness `setState`/`watch` hooks)
-- `CHANGELOG.md` (Unreleased note)
+## Task 2: Stylesheet discipline lint + palette hooks (Phase 0, zero visual change)
 
-**Estimated scope:** Small: 4 files (+2 test/markup parity)
-
-## Task 2: Pill reattach from `disconnected` + guards, ARIA, docs
-
-**Description:** Extend Task 1 so the pill also offers one-click reattach from
-`disconnected` when a prior tab is known (`tab` set, no client), stays inert (opens
-Settings, no reconnect) while `busy`/`connecting`/`reconnecting` or with no known tab,
-and exposes correct ARIA now that the pill is not always a sheet toggle. Update the
-in-panel help wording that points users at Settings for reconnecting.
+**Description:** Extend `test/stylesheet.test.mjs` to fail on raw px font sizes, border radii, and
+hex/rgba colors outside `:root` blocks. Capture today's violations in an explicit allowlist that
+Phases 1–2 shrink to empty. Extend `test/palette-contrast.test.mjs` scaffolding for the 7 state
+tokens introduced in Task 3.
 
 **Acceptance criteria:**
-- [ ] Pill reconnects only when a reattach is possible (known tab, idle); otherwise it opens Settings and never fires a partial reconnect
-- [ ] `aria-expanded`/`aria-controls`/`aria-label` on the pill are correct per state (toggle semantics only when it toggles the sheet), with keyboard-focus behavior unchanged
-- [ ] Help copy ("…then reconnect") and pill tooltips describe the new one-click path on both `panel.html` and `floating.html`
+- [ ] New lint rules fail on a deliberately injected violation (test-of-the-test)
+- [ ] Current tree passes via the frozen allowlist; allowlist entries are selector+property pairs
+- [ ] Palette suite still green; state-token cases added but marked pending until Task 3
+
+**Verification:**
+- [ ] Tests pass: `node --test test/stylesheet.test.mjs test/palette-contrast.test.mjs`
+- [ ] Checks pass: `npm run check`
+
+**Dependencies:** None (parallel-safe with Task 1)
+**Files likely touched:** `test/stylesheet.test.mjs`, `test/palette-contrast.test.mjs`
+**Estimated scope:** Small: 2 files
+
+## Checkpoint: Phase 0
+- [ ] Full suite green; `git diff` shows no change to `panel.css`/`panel.html` rendering paths
+- [ ] Human notified guardrails landed before any visual work
+
+## Task 3: Token scales + state colors (Phase 1)
+
+**Description:** Define `--text-*` (≤6 steps), `--space-*` (4px grid), `--radius-*` (5 + capsule),
+`--shadow-*` (2 levels + glass), `--dur-*`/`--ease-*` (motion tokens, reduced-motion kill switch
+kept), and `--state-*` for the 7 session states in `:root` (both themes). Map every existing value
+to the nearest step — intended visual delta ≈ zero. Resolve state colors AA across 2 themes ×
+4 accents; shrink Task 2's allowlist.
+
+**Acceptance criteria:**
+- [ ] No raw font-size/radius/color declarations remain outside `:root` except allowlisted hairlines
+- [ ] Palette test covers 7 states × 2 themes × 4 accents at AA (4.5:1 text, 3:1 UI)
+- [ ] Saved accent values unchanged (preference compatibility)
+- [ ] `prefers-reduced-motion` still disables motion wholesale
+
+**Verification:**
+- [ ] Tests pass: `node --test test/stylesheet.test.mjs test/palette-contrast.test.mjs test/preferences.test.mjs`
+- [ ] Checks pass: `npm run check`
+- [ ] Manual check: owner compares `dev/preview` against baseline screenshots (light+dark)
+
+**Dependencies:** Tasks 1–2
+**Files likely touched:** `panel.css`, `test/palette-contrast.test.mjs`, `test/stylesheet.test.mjs`
+**Estimated scope:** Large: 1 CSS file heavily + 2 tests
+
+## Task 4: One button (Phase 2)
+
+**Description:** Collapse the ~20 button/chip/pill variants' button side into one component:
+3 emphases (filled accent / tinted `--fill` / plain) × 3 sizes, token-driven, focus-visible ring
+consistent, disabled/busy treatments unified. Re-point existing classes; keep ids and behavior.
+
+**Acceptance criteria:**
+- [ ] Every visible button uses exactly one emphasis×size pair; no bespoke padding/radius left
+- [ ] Keyboard focus indicator visible on all buttons in both themes (AA 3:1)
+- [ ] Existing click-routing tests unchanged and green (behavior untouched)
 
 **Verification:**
 - [ ] Tests pass: `node --test test/panel-aria.test.mjs test/panel-lifecycle.test.mjs`
-- [ ] Checks pass: `npm run check`
-- [ ] Manual check: disconnected-with-tab → pill reattaches; busy/connecting → pill opens Settings; screen-reader label announces the action
-
-**Dependencies:** Task 1
-
-**Files likely touched:**
-- `panel.js` (pill routing guards, `render()` ARIA/title)
-- `panel.html`, `floating.html` (help copy, pill attributes)
-- `test/panel-aria.test.mjs` (ARIA-per-state cases)
-
-**Estimated scope:** Small: 2–3 files (+tests)
-
-## Checkpoint: After Tasks 1–2
-
-- [ ] All tests pass (`npm run check`)
-- [ ] Pill reconnects from error/disconnected-with-tab; gear still opens Settings everywhere
-- [ ] Floating window matches the side panel
-- [ ] Review with human before proceeding
-
-## Task 3: Compact chip layout (truncation, tooltip, narrow panels)
-
-**Description:** Make the `picker-bar` repo/branch chips compact and readable:
-bounded widths with ellipsis truncation, full-value tooltips, stable 28px height
-aligned with the composer, and a clean wrap/stack at narrow (≤380px) widths without
-pushing the Send row off-screen. Presentation-only; no behavior change.
-
-**Acceptance criteria:**
-- [ ] Long repo/branch names (up to the 120-char cap) truncate with ellipsis and expose the full value via tooltip on both chips
-- [ ] At 360px, 380px, and 620px+ widths the chip bar stays inside the composer with no overlap of Send/attach controls
-- [ ] `floating.html` renders identically (shared `panel.css`, mirrored markup verified)
-
-**Verification:**
-- [ ] Tests pass: `node --test test/stylesheet.test.mjs test/palette-contrast.test.mjs` (+ any chip-markup assertions added to `panel-aria`)
-- [ ] Checks pass: `npm run check`
-- [ ] Manual check: Agent tab with a long repo + branch name at three widths, light + dark theme
-
-**Dependencies:** None (soft order after Task 2 for single-session work; shares `panel.css` hunks)
-
-**Files likely touched:**
-- `panel.css` (`.picker-bar`, `.picker-chip` ~L594–612, narrow breakpoint ~L538)
-- `panel.html`, `floating.html` (only if chip markup/attributes must change)
-- `test/panel-aria.test.mjs` or `test/stylesheet.test.mjs` (new assertions)
-
-**Estimated scope:** Small: 1–2 files (+tests)
-
-## Task 4: Chip loading/disabled states + state tests
-
-**Description:** Give the chips unambiguous states in `renderPickerBar`: opening/picking
-in progress (busy pill on the active chip), disabled-while-busy/pending, present-but-
-disabled by Arena, and not-present (bar hidden, as today) — each with an accurate
-tooltip. Cover the state matrix with jsdom tests.
-
-**Acceptance criteria:**
-- [ ] Every `renderPickerBar` state (idle, picker open, busy, pending turn, Arena-disabled, missing) shows the correct enabled/disabled treatment and tooltip text
-- [ ] Opening the picker dialog or starting a turn mid-render cannot leave a chip enabled-but-dead or disabled-but unexplained
-- [ ] jsdom tests cover the full state matrix for both chips
-
-**Verification:**
-- [ ] Tests pass: `node --test test/repo-pickers.test.mjs` (new panel-state cases) or the panel lifecycle suite hosting them
-- [ ] Checks pass: `npm run check`
-- [ ] Manual check: open repo picker → chips disable with reason; start a turn → chips disable; Arena-disabled picker → explanatory tooltip
+- [ ] Checks pass: `npm run check`; Manual: `dev/preview` button matrix reviewed
 
 **Dependencies:** Task 3
+**Files likely touched:** `panel.css`, `panel.html` (+ regenerate `floating.html`), tests
+**Estimated scope:** Medium: 2–3 files + regenerated floating
 
-**Files likely touched:**
-- `panel.js` (`renderPickerBar` ~L390, `openPickerDialog`/`receivePicker` state flow)
-- `panel.css` (state treatments, if new classes are needed)
-- `test/repo-pickers.test.mjs` (state-matrix cases)
+## Task 5: One chip + one row (Phase 2)
 
+**Description:** Unify repo/branch chips, preset chip, attachment/screenshot chips onto one slotted
+chip vocabulary (icon · label · chevron · count); unify dialog option rows, model rows, preset rows
+onto one row component. Truncation + full-value tooltips preserved (prior shipped behavior).
+
+**Acceptance criteria:**
+- [ ] Chips share geometry tokens; state coverage idle/open/busy/disabled/missing renders from one rule set
+- [ ] Option rows keep tested ARIA vocabulary (listitem/button/group per IMPLEMENTATION-STATUS)
+- [ ] Long names truncate with ellipsis + tooltip at 360/380/620px
+
+**Verification:**
+- [ ] Tests pass: `node --test test/repo-pickers.test.mjs test/panel-aria.test.mjs test/stylesheet.test.mjs`
+- [ ] Checks pass: `npm run check`; Manual: preview at three widths, both themes
+
+**Dependencies:** Task 4
+**Files likely touched:** `panel.css`, `panel.js` (`renderPickerBar` presentation only), `panel.html`/`floating.html`
+**Estimated scope:** Medium: 3–4 files
+
+## Task 6: One modal system + surfaces (Phase 2)
+
+**Description:** Unify the four native `<dialog>`s and the settings sheet into one modal geometry.
+Fold-or-restyle decision per plan: fold into `<dialog>` ONLY if inert-background, Tab confinement,
+and opener-restore behavior survive `panel-lifecycle.test.mjs`; otherwise restyle the sheet. Then
+reconcile notice, clarification/pair card, message bubbles, live activity, and status pill (capsule
+label treatment) onto tokens.
+
+**Acceptance criteria:**
+- [ ] All dialogs share header/body/footer geometry, scrim, radius, elevation tokens
+- [ ] Focus contract verified: background inert, Tab confined, opener restored (tests green)
+- [ ] Status pill reads as iOS capsule label in all 7 states with glyph+word (not color alone)
+- [ ] Decision (fold vs restyle) recorded in this file with rationale
+
+**Verification:**
+- [ ] Tests pass: `node --test test/panel-lifecycle.test.mjs test/panel-aria.test.mjs`
+- [ ] Checks pass: `npm run check`; Manual: screen-reader pass on each dialog (owner-side)
+
+**Dependencies:** Task 3 (can run parallel with 4–5 with hunk coordination)
+**Files likely touched:** `panel.css`, `panel.html`/`floating.html`, `panel.js` (sheet mechanics only), tests
+**Estimated scope:** Large: 4–5 files
+
+## Checkpoint: Phase 2
+- [ ] Suite green incl. lifecycle/aria; Task 2 allowlist empty for touched selectors
+- [ ] Floating regenerated via script after markup changes; parity verified
+
+## Task 7: States × surfaces matrix + two-pane floating (Phase 3)
+
+**Description:** Narrow-first review of all 7 session states across {status pill, transcript, dock,
+composer, Send} at 360px; relax ≥620px; ≥720px floating becomes two-pane (transcript | live
+activity) using CSS grid over existing DOM only. Extend `dev/preview` state switcher so every cell
+is reviewable.
+
+**Acceptance criteria:**
+- [ ] Preview exposes state × surface × theme × accent × text-size selection for owner review
+- [ ] No overflow/clipping at 360px in any state; Send row always reachable
+- [ ] Two-pane appears only ≥720px; narrow layout byte-identical CSS below breakpoint
+- [ ] `window-geometry.js`, `live-view.js` logic untouched (CSS/markup only)
+
+**Verification:**
+- [ ] Tests pass: `node --test test/live-view.test.mjs test/conversation-view.test.mjs test/stylesheet.test.mjs`
+- [ ] Checks pass: `npm run check`; Manual: OWNER browser review of the full matrix (blocking)
+
+**Dependencies:** Tasks 4–6
+**Files likely touched:** `panel.css`, `dev/preview.js`, `dev/preview.html`
+**Estimated scope:** Large: 3–4 files
+
+## Checkpoint: Phase 3
+- [ ] Owner sign-off on the rendered matrix before subtraction/docs
+
+## Task 8: Subtraction proposals (Phase 4, propose-only default)
+
+**Description:** Present the six candidate cuts (toolbar version/turn-count relocation, composer
+help line condense, settings footer condense, brand orb → glyph, dialog foot copy trim, empty-state
+orb → text) as line items with exact relocation targets; apply ONLY those the human approves.
+Fail-closed statements move, never vanish.
+
+**Acceptance criteria:**
+- [ ] Each cut listed with before/after copy and destination; approval checkbox per line item
+- [ ] Applied cuts keep every guarantee string present somewhere reachable
+- [ ] Not-approved cuts untouched
+
+**Verification:**
+- [ ] Tests pass: `node --test test/security-notice.test.mjs test/panel-aria.test.mjs` (copy assertions)
+- [ ] Checks pass: `npm run check`; Manual: copy audit vs fail-closed inventory
+
+**Dependencies:** Task 7 (approval can be gathered earlier)
+**Files likely touched:** `panel.html`/`floating.html`, `panel.css`, `panel.js` (copy strings)
+**Estimated scope:** Small–Medium depending on approvals
+
+## Task 9: Styleguide + design-system docs (Phase 5)
+
+**Description:** Create `dev/styleguide.html` rendering every component × state × theme × accent ×
+text size from the real `panel.css`; write `docs/design-system.md` codifying the Apple idiom
+(system-font stack, iOS semantic colors, glass rules, capsule geometry, spring motion, spacing/
+type/radius scales, do/don't examples); update README appearance section and CHANGELOG Unreleased.
+
+**Acceptance criteria:**
+- [ ] Styleguide loads with no console errors and mirrors live panel components (shared CSS only)
+- [ ] design-system.md documents every token group introduced in Task 3 with usage rules
+- [ ] CHANGELOG entry honest about fixture-vs-browser verification status
+
+**Verification:**
+- [ ] Checks pass: `npm run check`; Manual: owner opens styleguide once
+
+**Dependencies:** Tasks 3–8
+**Files likely touched:** `dev/styleguide.html` (new), `docs/design-system.md` (new), `README.md`, `CHANGELOG.md`
+**Estimated scope:** Medium: 4 files (2 new, dev-only styleguide not packaged)
+
+## Task 10: Release checks (Phase 6)
+
+**Description:** Final verification sweep: full suite, packaging (allow-list unchanged — no fonts),
+`docs/IMPLEMENTATION-STATUS.md` honesty pass marking what is jsdom-verified vs owner-browser-
+verified vs live-Arena-unverified; prepare `/review` then `/ship`; ship-time version decision
+(stay 2.9.0 vs bump 2.10.0) made with the human.
+
+**Acceptance criteria:**
+- [ ] `npm run check` green; `npm run package:extension` succeeds; allow-list diff empty
+- [ ] IMPLEMENTATION-STATUS updated; live smoke test explicitly recorded as owner action
+- [ ] Human review completed on the final diff
+
+**Verification:**
+- [ ] Tests pass: `node --test test/*.test.mjs` (full)
+- [ ] Build succeeds: `npm run package:extension`
+- [ ] Manual check: owner live Arena smoke test before merge
+
+**Dependencies:** Task 9
+**Files likely touched:** `docs/IMPLEMENTATION-STATUS.md`, `CHANGELOG.md`, possibly `manifest.json` (version decision only)
 **Estimated scope:** Small: 2–3 files
 
-## Checkpoint: After Tasks 3–4
-
-- [ ] All tests pass (`npm run check`)
-- [ ] Chips readable at all widths with correct states and tooltips; floating matches
-- [ ] Review with human before proceeding
-
-## Task 5: Reproduce-first fixture for the false SECURITY_CHECK (failing test)
-
-**Description:** Without changing shipped code, build a jsdom fixture that reproduces
-the false positive: an Agent page whose selected repository name matches
-`SECURITY_TEXT` (start with `captcha-solver`, per the code's own comment) surfaced in
-a post-switch notice (`[data-sonner-toast]`/`[role=alert]`/`h1`), then drive the
-picker-adjacent `checkBlocks`/`securityNotice` call sites (`handlePicker` entry,
-post-close, next-open) to pin exactly which one raises `SECURITY_CHECK` "right after
-pick". Land as a failing test documenting the call site.
-
-**Acceptance criteria:**
-- [ ] A failing test exists showing `SECURITY_CHECK` raised from picker-adjacent UI text containing only the repo name, with no genuine interstitial present
-- [ ] The test names the exact call site (handlePicker entry check vs post-close check vs next-open check) via the driven path
-- [ ] No shipped code changed in this task (fixture + test only)
-
-**Verification:**
-- [ ] Tests pass-except-new: new test fails for the documented reason; `npm run check` otherwise green
-- [ ] Manual check (live tab, if available): select a security-worded repo and confirm the same error text appears without Send
-
-**Dependencies:** None (needs no Phase 1–2 code; runs last per agreed order)
-
-**Files likely touched:**
-- `test/security-notice.test.mjs` (false-positive fixture cases)
-- `test/picker-content.test.mjs` (picker-path driver, if the call site needs the content harness)
-
-**Estimated scope:** Small: 1–2 files (tests only)
-
-## Task 6: Narrow the SECURITY_CHECK trigger to genuine verifications
-
-**Description:** Fix the call site pinned by Task 5 so text attributable to the
-pickers' own current values (repo/branch labels the adapter just read via `repoInfo`)
-cannot raise `SECURITY_CHECK`, while a genuine interstitial (challenge iframe,
-verification dialog copy unrelated to picker values) still raises exactly as today.
-Fail closed: any doubt keeps the current fatal behavior.
-
-**Acceptance criteria:**
-- [ ] Task 5's reproduction passes: selecting/opening around a `captcha`-named repo raises no `SECURITY_CHECK`
-- [ ] All genuine-positive cases (challenge iframe, "verify you are human" interstitial, hidden-remnant quiet) behave exactly as before
-- [ ] No new page-shape allow-listing and no silent swallowing: non-picker-attributable matches still fail with coded `SECURITY_CHECK`
-
-**Verification:**
-- [ ] Tests pass: `node --test test/security-notice.test.mjs test/picker-content.test.mjs test/content-script.test.mjs`
-- [ ] Checks pass: `npm run check`
-- [ ] Manual check: live tab — security-worded repo selects cleanly; (if safely simulable) a real interstitial still pauses with `SECURITY_CHECK`
-
-**Dependencies:** Task 5
-
-**Files likely touched:**
-- `agent-dom.js` (`checkBlocks` ~L367, `securityNotice` ~L343, `SECURITY_TEXT` ~L334, picker-label helpers)
-- `agent-content.js` (only if the fix belongs at the `handlePicker` call site ~L653 instead)
-- `test/security-notice.test.mjs` (Task 5 test now green + genuine-positive guards)
-
-**Estimated scope:** Medium: 2–3 files
-
-## Task 7: Regression tests + full verification
-
-**Description:** Lock the fix in with regression coverage (false-positive fixtures
-across toast/alert/h1 carriers × repo/branch values, plus genuine-positive controls),
-run the full suite and packaging, and record the manual live-tab verification the
-Node suite cannot cover.
-
-**Acceptance criteria:**
-- [ ] Regression matrix covers each notice carrier (`[role=alert]`, `[data-sonner-toast]`, `h1`/`h2`, challenge iframe) × picker-valued vs genuine verification text
-- [ ] `npm run check`, `npm run test:browser` (if Chromium available), and `npm run package:extension` all pass with the extension allow-list unchanged
-- [ ] `docs/IMPLEMENTATION-STATUS.md` / `CHANGELOG.md` note the fix and its live-verification status honestly (verified vs fixture-only)
-
-**Verification:**
-- [ ] Tests pass: `npm test` (full) + `npm run test:browser`
-- [ ] Checks pass: `npm run check` + `npm run package:extension`
-- [ ] Manual check: live Agent tab — repo select → no error; branch open → no error; next Send → works; real interstitial (if encountered) → pauses and resumes
-
-**Dependencies:** Task 6
-
-**Files likely touched:**
-- `test/security-notice.test.mjs`, `test/picker-content.test.mjs` (regression matrix)
-- `CHANGELOG.md`, `docs/IMPLEMENTATION-STATUS.md` (status notes)
-- `test/browser/fixtures/agent.html` (only if a browser-fixture carrier is needed)
-
-**Estimated scope:** Small: 2–4 files (tests + docs)
-
 ## Checkpoint: Complete
-
-- [ ] All tests pass; all genuine-positive security tests still green
-- [ ] Pill reconnect, chip polish, and security fix all verified per their manual checks
-- [ ] Plan checkboxes all ticked; ready for `/review`, then `/ship`
+- [ ] All tasks above ticked; all checkpoints signed; ready for `/review`, then `/ship`
 - [ ] The human has reviewed and approved the completed work
