@@ -137,6 +137,27 @@ Extension pages declare `connect-src 'none'`: the extension itself makes no netw
 | `worker.js` | One-shot router: attach, staged grants, floating window |
 | `floating-window.js` / `window-geometry.js` | Popup window creation and bound fitting |
 | `theme.js` / `customization.js` / `recent-models.js` / `copy.js` | Appearance, recents, clipboard write |
+| `skill-presets.js` | Generated task prompts (the only shipped slice of `.agents/`) plus the pure `composePresetText` / `findPresets` helpers |
+
+## Task prompts
+
+The panel's **Task prompts** chip (composer dock) lists every workflow in the vendored agent-skills
+pack as a ready-to-send draft: 25 skills grouped by lifecycle phase, plus the 9 `/spec` `/plan`
+`/build` `/test` `/review` `/ship` entry points. Choosing one writes that workflow and a `My task:`
+line into the composer. Nothing is sent, nothing is stored, and the single-click Send below stays the
+only way out — the preset path shares no code with the send path.
+
+The pack is Markdown for coding agents and is deliberately not packaged (AGENTS.md), so it cannot be
+read at runtime. `scripts/build-skill-presets.mjs` derives `skill-presets.js` from `.agents/` instead
+(one prompt per `SKILL.md` and per command, grouped by the phase table in AGENTS.md), and
+`test/skill-presets.test.mjs` re-runs that derivation and compares it byte-for-byte with the
+committed file. A pack refresh that forgets `npm run build:presets` therefore fails the suite rather
+than shipping prompts that no longer match the pack.
+
+A preset that would push the draft past Arena's 30,000-character limit is refused with a coded
+`PRESET_TOO_LONG` notice and inserts nothing — a silently truncated workflow prompt is worse than no
+prompt. The chip hides when the composer is locked, and a turn starting while the dialog is open
+closes it rather than trapping focus over a draft you can no longer type in.
 
 ## 2.8.2 recovery additions
 

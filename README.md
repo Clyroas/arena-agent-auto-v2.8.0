@@ -125,6 +125,8 @@ Browser tests require a working Chromium installation. The initial implementatio
 
 Coding agents working in this repository load [Addy Osmani's agent-skills](https://github.com/addyosmani/agent-skills) pack (25 lifecycle skills, MIT) from [`.agents/`](.agents/README.md). Discovery is the portable [Agent Skills](https://agentskills.io/specification) path (`.agents/skills/<name>/SKILL.md`); [AGENTS.md](AGENTS.md) tells agents without a skill tool to open those files. Shared checklists stay in `.agents/references/` so the pack's relative links resolve. None of this is packed into the extension.
 
+One generated slice of it *is* shipped: `skill-presets.js` turns every skill and lifecycle command into a ready-to-send prompt, and the panel's **Task prompts** chip offers them beside the composer. `scripts/build-skill-presets.mjs` derives that file from `.agents/`, so `npm run build:presets` regenerates it and `test/skill-presets.test.mjs` fails if it drifts from the pack.
+
 ## Repository map
 
 | Path | Role |
@@ -138,6 +140,7 @@ Coding agents working in this repository load [Addy Osmani's agent-skills](https
 | `conversation-view.js`, `live-view.js`, `rich-view.js`, `live-status.js` | Transcript and live-activity rendering |
 | `attachment-policy.js`, `attachment-state.js`, `attachment.js`, `stage-main.js` | Staged-file rules, worker attach, main-world insertion |
 | `screenshot.js` | Link screenshots (optional permission, opt-in per use) |
+| `skill-presets.js` | Task prompts derived from the vendored agent-skills pack (generated — see `scripts/build-skill-presets.mjs`) |
 | `core.js`, `copy.js`, `theme.js`, `customization.js`, `recent-models.js`, `window-geometry.js`, `floating-window.js`, `tab-awake.js` | Small shared modules |
 | `dev/` | Dev-only motion preview (not part of the extension) |
 | `test/` | Node/jsdom regressions plus opt-in Chromium extension fixtures |

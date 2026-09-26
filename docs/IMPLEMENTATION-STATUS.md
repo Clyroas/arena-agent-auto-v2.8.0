@@ -20,6 +20,24 @@ Mirrors Arena's own repo/branch picker buttons (the supplied trigger markup) in 
 
 Boundary: Arena's picker popover behaviour (portal, Escape handling, list rendering) is modelled from the supplied trigger markup and standard Radix/shadcn patterns; it has **not** been exercised against a live signed-in Arena session. Recognition is intentionally exact — an Arena redesign that changes the icons reports the pickers as absent rather than guessing.
 
+## 2.9.0 addition — ready-made task prompts in the panel
+
+The vendored agent-skills pack guides coding agents in this repository but is never packaged
+(AGENTS.md). `scripts/build-skill-presets.mjs` derives one prompt per `SKILL.md` and per lifecycle
+command into `skill-presets.js`, which *is* packaged, and the panel's Task prompts chip lists them
+beside the composer: 34 presets, grouped by the phase table in AGENTS.md, with search.
+
+| Area | Changes | Verification |
+|---|---|---|
+| Derivation | Frontmatter `name`/`description`, the Overview's first paragraph, and the AGENTS.md phase table become one prompt per workflow; provenance (plugin version, commit) is read from `.agents/SOURCE.md` into the shipped header. | `skill-presets.test.mjs` regenerates the module and compares it byte-for-byte with the committed file, so drift fails the suite. |
+| Insertion | `composePresetText` appends after an existing draft (one blank line, trailing whitespace trimmed) or starts a fresh message, and refuses to exceed the 30,000-character limit with a coded `PRESET_TOO_LONG` notice instead of truncating. | Pure-function tests for empty, whitespace-only, append, trailing-whitespace and overflow cases. |
+| Panel UI | A dock chip opens a modal dialog that reuses the model/picker list vocabulary (row = `listitem`, button = control, group = heading), filters on label/group/summary, reports "N of 34 prompts", and marks the prompt already in the draft with `aria-current`. | Real `panel.js` against real `panel.html`/`floating.html` under jsdom: grouping, search, empty state, insertion, caret placement, refusal, one-dialog-at-a-time, and floating-window id parity. |
+| Isolation | The chip hides while the composer is locked; a turn starting with the dialog open closes it. Inserting dispatches a real `input` event, so auto-grow, the counter and link chips behave exactly as if typed. No preset path touches the send path, the port, or storage. | Panel tests assert no `send` call, the enabled Send button, and the auto-grown textarea; `package.test.mjs` and `agent-skills.test.mjs` still keep `.agents/` out of the artifact. |
+
+Boundary: the prompts are fixed instruction templates, not the pack itself — a model receiving one
+still needs the workflow's text, which the prompt carries in summary. The pack's own Markdown remains
+the source of truth and is regenerated on every refresh.
+
 ## Implemented (2.8.3 batch)
 
 | Review area | Changes | Verification |
