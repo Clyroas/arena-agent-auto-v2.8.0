@@ -983,7 +983,7 @@
     const direct = added.some(row => directEls.has(row.el));
     return ` [Seen: ${kinds.join(' · ') || 'nothing'}${added.length > 8 ? ' …' : ''}; ${total} row(s) on page${direct ? `; list ${directReversed ? 'newest-first' : 'top-down'}` : ''}]`;
   }
-  function matchTurn(tx, doc = document) {
+  function matchTurn(tx, doc = document, { deferRich = false } = {}) {
     const list = rows(doc), ids = list.map(r => r.id);
     // Exact prefix, not a page text diff. Virtualization or conversation changes fail closed.
     if (tx.baseline.some((id, i) => ids[i] !== id))
@@ -1097,8 +1097,10 @@
       return item.questions.some(q => !q.data.answered);
     });
     const complete = pairDone || (!!reply && ended(reply.row.el) && !running(doc) && !pendingQuestions.length && !pendingCards);
-    // The formatted version is only built for a finished reply (it is what the panel keeps).
-    const rich = complete ? richOf(pairDone ? pairEl : reply.row.el) : null;
+    // The content-side settle loop rechecks attribution several times before emitting COMPLETE.
+    // Keep those checks read-only and cheap; build the formatted version only on the final scan.
+    const replyEl = complete ? (pairDone ? pairEl : reply.row.el) : null;
+    const rich = replyEl && !deferRich ? richOf(replyEl) : null;
     // v2.8.0: the live preview is formatted too. Rebuilt only when the text changed, at most about twice a
     // second (reading the page structure costs more than reading text); the plain text is always sent.
     let liveRich = null;
@@ -1116,7 +1118,7 @@
       turnIds: added.map(row => row.id), questionRows: classified.filter(item => item.questions.length).map(item => item.row.id), questions, tools,
       interactionNotice: unknownQuestions ? 'Some question controls do not match the supported card. Answer those in Arena; they will not be clicked here.' : '',
       liveText, liveRich, thinking, generating: running(doc),
-      complete, rich,
+      complete, rich, replyEl: deferRich ? replyEl : null,
       text: pairDone ? pairText : reply?.text || '', model: pairDone ? pairModel : reply && directEls.has(reply.row.el) ? modelOf(reply.row.el) : '',
       choice: pairDone ? pairState.choice : reply && choiceMade ? tx.pairChoice : '' };
   }

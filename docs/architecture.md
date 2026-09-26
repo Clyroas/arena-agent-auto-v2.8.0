@@ -49,11 +49,13 @@ calls are bounded the same way.
    asynchronously. If the new connection arrived first it would be refused as `TAB_IN_USE`; the
    content script therefore probes the existing owner port and takes over when it is dead, and the
    panel retries `TAB_IN_USE` a few times with backoff before giving up.
-3. **Streaming** — the content script watches the transcript with a `MutationObserver`. Scans (which
-   read layout via `getComputedStyle`/`getClientRects`/`innerText`) are coalesced to at most one per
-   `MIN_SCAN_MS` (120 ms); the 300 ms timer and panel heartbeats still force a scan so nothing is
-   missed. Events flow to the panel, where `LiveView` renders tool steps, clarification cards and
-   response pairs, and `live-status.js` derives "last change N ago".
+3. **Streaming** — the content script observes the transcript only during an active Send or WATCH;
+   idle/finished connections do not watch every mutation in the Arena tab. Scans (which read layout
+   via `getComputedStyle`/`getClientRects`/`innerText`) are coalesced to at most one per `MIN_SCAN_MS`
+   (120 ms); the 300 ms timer and panel heartbeats still force a scan while tracking. Completed-looking
+   replies are rechecked for 700 ms, but their formatted DOM is built only when COMPLETE is emitted.
+   Events flow to the panel, where `LiveView` renders tool steps, clarification cards and response pairs,
+   and `live-status.js` derives "last change N ago".
 4. **Teardown** — on panel close the port drops, staged grants are revoked best-effort (never
    throwing out of `close()`), and the Arena tab's `autoDiscardable` flag is restored.
 

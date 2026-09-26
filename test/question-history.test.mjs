@@ -57,6 +57,27 @@ test('an answered row whose card is gone is history, not a second reply', () => 
   } finally { page.close(); }
 });
 
+test('resume checks a finished reply without rebuilding its rich DOM on every settle scan', () => {
+  const page = openDom(userRow('user-1', 'hello world') + replyRow('assistant-1', '<pre><code>const answer = 42;</code></pre>'));
+  const original = page.window.Node.prototype.cloneNode;
+  let preClones = 0;
+  page.window.Node.prototype.cloneNode = function (...args) {
+    if (this.nodeName === 'PRE') preClones++;
+    return original.apply(this, args);
+  };
+  try {
+    const tx = { baseline: [], prompt: 'hello world', userId: 'user-1' };
+    const first = page.D.matchTurn(tx, page.window.document, { deferRich: true });
+    const second = page.D.matchTurn(tx, page.window.document, { deferRich: true });
+    assert.equal(first.complete, true);
+    assert.equal(second.complete, true);
+    assert.equal(preClones, 0, 'the settle scans need plain text and attribution, not formatted DOM');
+    const rich = page.D.richOf(second.replyEl);
+    assert.ok(rich?.length, 'the final reply can still be formatted once for COMPLETE');
+    assert.equal(preClones, 1);
+  } finally { page.close(); }
+});
+
 test('a hidden card remnant still marks the row as history without resume state', () => {
   const html = userRow('user-1', 'hello world')
     + `<div data-agent-transcript-message="true" data-chat-message-id="assistant-1"><div class="prose">I need to clarify something.</div><div style="display:none"><div role="radiogroup" aria-label="Which?"><button role="radio" aria-checked="true"><span class="body-sm">A</span></button></div></div></div>`

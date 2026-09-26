@@ -30,7 +30,15 @@
   }
   function stopTransaction() {
     const old = transaction; transaction = null;
+    observer?.disconnect();
+    clearTimeout(scanTimer); scanTimer = null; scanQueued = false;
     old?.abort?.abort(); clearStaging(old);
+  }
+  function observeTransaction() {
+    // Idle connections only need the port and PROBE. Watching every page mutation after a completed
+    // task wastes work in Arena's renderer even though scan() has no transaction to inspect.
+    observer?.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true,
+      attributeFilter: ['aria-label', 'disabled', 'aria-disabled', 'hidden', 'data-chat-message-id', 'aria-checked', 'aria-expanded'] });
   }
   function stageResponse(promise, tx) {
     return new Promise((resolve, reject) => {
@@ -336,7 +344,7 @@
       if (holdForSecurity(tx)) return;
       D.checkBlocks();
       let result;
-      try { result = D.matchTurn(tx); tx.unclearSince = 0; tx.securityClearedAt = 0; }
+      try { result = D.matchTurn(tx, document, { deferRich: true }); tx.unclearSince = 0; tx.securityClearedAt = 0; }
       catch (caught) {
         // Direct pages re-render while Arena moves a new chat to /c/<id>; a momentary odd row layout
         // is not a reason to stop. Nothing is captured while unclear; if it persists, fail as before.
@@ -350,7 +358,7 @@
         if (['CONVERSATION_CHANGED', 'AMBIGUOUS_TURN', 'AMBIGUOUS_REPLY'].includes(e?.code) &&
             Date.now() - (tx.securityClearedAt || 0) < SECURITY_SETTLE_MS) {
           if (D.reanchor?.(tx)) {
-            try { result = D.matchTurn(tx); tx.unclearSince = 0; tx.securityClearedAt = 0; settled = true; }
+            try { result = D.matchTurn(tx, document, { deferRich: true }); tx.unclearSince = 0; tx.securityClearedAt = 0; settled = true; }
             catch (retry) { e = retry; }
           }
           // Still re-mounting: wait quietly and never capture from a partial transcript.
@@ -393,8 +401,9 @@
       if (result.complete && result.text && !tx.answerInFlight) {
         if (tx.completedText !== result.text) { tx.completedText = result.text; tx.completeAt = Date.now(); }
         if (Date.now() - tx.completeAt >= 700) {
+          const rich = result.replyEl ? D.richOf(result.replyEl) : result.rich || null;
           emit({ type: 'COMPLETE', requestId: tx.requestId, userMessageId: tx.userId,
-            assistantMessageId: tx.assistantId, text: result.text, rich: result.rich || null, url: tx.url, model: result.model || '', choice: result.choice || '' });
+            assistantMessageId: tx.assistantId, text: result.text, rich, url: tx.url, model: result.model || '', choice: result.choice || '' });
           stopTransaction();
         }
       } else { tx.completedText = ''; tx.completeAt = 0; }
@@ -462,6 +471,7 @@
       const tx = { requestId: message.requestId, prompt: message.prompt.trim(), url: location.href, clicked: true, resumed: true,
         userId: message.userMessageId, baseline: list.slice(0, index).map(row => row.id), ackDeadline: Infinity, attachmentLabels: !!message.hadAttachments, questionRows: known };
       transaction = tx;
+      observeTransaction();
       emit({ type: 'WATCHING', requestId: tx.requestId });
       scan();
     } catch (e) { emit({ type: 'ERROR', requestId: message.requestId, code: e.code || 'WATCH_UNAVAILABLE', message: e.message, clicked: false }); }
@@ -516,6 +526,7 @@
       if (!D.enabled(button)) D.fail('SEND_UNAVAILABLE', 'Arena’s Send button stayed unavailable. The prompt may remain in its composer, but no Send click was attempted. Check sign-in, model access, or verification in the tab.');
       // Exactly one click attempt. No click/Enter retry on any failure or disconnect.
       tx.clicked = true; tx.ackDeadline = Date.now() + 15000;
+      observeTransaction();
       button.click(); scan();
     } catch (e) { if (transaction === tx) error(e, tx); }
     finally { clearStaging(tx); }
@@ -712,8 +723,6 @@
     owner = port; lastHeartbeat = Date.now();
     document.addEventListener('click', onPageClick, true);
     observer = new MutationObserver(queueScan);
-    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true,
-      attributeFilter: ['aria-label', 'disabled', 'aria-disabled', 'hidden', 'data-chat-message-id', 'aria-checked', 'aria-expanded'] });
     timer = setInterval(() => {
       if (Date.now() - lastHeartbeat > LEASE_MS) return cleanup();
       scan();

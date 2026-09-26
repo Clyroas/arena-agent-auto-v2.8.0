@@ -21,7 +21,7 @@ function makePort(name = 'arena-agent-content-v3') {
   return port;
 }
 
-function open() {
+function open({ prepareWindow } = {}) {
   const dom = new JSDOM('<!doctype html><html><body><main id="app"></main></body></html>', {
     url: 'https://arena.ai/agent/c/1', runScripts: 'outside-only', pretendToBeVisual: true
   });
@@ -51,6 +51,7 @@ function open() {
     reanchor: () => false
   };
   window.ArenaAgentAttachments = { ATTACHMENT_POLICY: { maxFiles: 4, maxBytes: 8 * 1024 * 1024 } };
+  prepareWindow?.(window);
   window.eval(source);
   return {
     window, counters, connectListeners,
@@ -102,6 +103,54 @@ test('a reconnect takes over when the previous panel is gone but the page has no
     assert.equal(reconnected.disconnected, false);
     reconnected.emit({ type: 'PING' });
     assert.equal(reconnected.posted.filter(message => message.type === 'PONG').length, 2);
+  } finally { page.close(); }
+});
+
+test('an idle completed conversation does not observe the entire document; WATCH observes only while tracking', () => {
+  let observed = 0, disconnected = 0;
+  const page = open({ prepareWindow(window) {
+    const NativeObserver = window.MutationObserver;
+    window.MutationObserver = class extends NativeObserver {
+      observe(...args) { observed++; return super.observe(...args); }
+      disconnect() { disconnected++; return super.disconnect(); }
+    };
+  } });
+  try {
+    const port = page.connect(makePort());
+    port.emit({ type: 'PROBE' });
+    assert.equal(observed, 0, 'connecting to an already-completed task needs no transcript observation');
+    port.emit({ type: 'WATCH', requestId: 'aaaa1111-1111-1111-1111-111111111111', prompt: 'hello', userMessageId: 'user-1', url: 'https://arena.ai/agent/c/1' });
+    assert.equal(observed, 1, 'a running tracked turn still watches changes');
+    port.emit({ type: 'CANCEL' });
+    assert.ok(disconnected >= 1, 'stopping capture detaches its document-wide observer');
+  } finally { page.close(); }
+});
+
+test('a resumed finished reply formats once when COMPLETE is emitted, then stops observing', async () => {
+  let observed = 0, disconnected = 0, formats = 0;
+  const page = open({ prepareWindow(window) {
+    const NativeObserver = window.MutationObserver;
+    window.MutationObserver = class extends NativeObserver {
+      observe(...args) { observed++; return super.observe(...args); }
+      disconnect() { disconnected++; return super.disconnect(); }
+    };
+  } });
+  try {
+    const D = page.window.ArenaAgentDOM;
+    const replyEl = page.window.document.getElementById('app');
+    D.matchTurn = () => ({ accepted: true, userId: 'user-1', assistantId: 'reply-1', complete: true, text: 'done', replyEl });
+    D.richOf = () => { formats++; return [['p', {}, 'done']]; };
+    const port = page.connect(makePort());
+    port.emit({ type: 'WATCH', requestId: 'aaaa2222-2222-2222-2222-222222222222', prompt: 'hello', userMessageId: 'user-1', url: 'https://arena.ai/agent/c/1' });
+    assert.equal(observed, 1);
+    assert.equal(formats, 0, 'the first completed-looking scan still waits for stability');
+    await sleep(750);
+    port.emit({ type: 'PING' });
+    const complete = port.posted.find(message => message.type === 'COMPLETE');
+    assert.equal(complete?.text, 'done');
+    assert.deepEqual(complete.rich, [['p', {}, 'done']]);
+    assert.equal(formats, 1);
+    assert.ok(disconnected >= 1, 'capture stops observing when COMPLETE is emitted');
   } finally { page.close(); }
 });
 
