@@ -1,72 +1,47 @@
 /* Arena Auto Chat — chat-first side panel.
    Design contract: the conversation is the surface and Send is the primary action.
    Mode, notices and the composer stack in one measured dock so nothing covers the
-   transcript. Colour comes from the theme and accent tokens — not a second rainbow.
-   Motion is short and state-keyed; working, error and focus are borders and words,
-   not spinning gradients. Narrow panels stack connection actions instead of clipping them. */
+   transcript. v2.10.0 replaced the iOS-style two-theme design with the ROG design
+   language (spec/rog-design-language.md): dark-only, one red accent, angular geometry.
+   Colour still comes from the token set below — not a second rainbow. Motion is short
+   and state-keyed; working, error and focus are borders and words, not spinning
+   gradients. Narrow panels stack connection actions instead of clipping them. */
 
+/* Dark-only palette: every value verified by test/palette-contrast.test.mjs against
+   WCAG AA (4.5:1 text, 3:1 state graphics) on every surface this list stacks. */
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "Segoe UI Variable Text", "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --bg: #fbfbfd;
-  --surface: #ffffff;
-  --grouped: #f2f2f7;
-  --label: #1d1d1f;
-  --secondary: rgba(60, 60, 67, .78);
-  --tertiary: #6e6e73;
-  --separator: rgba(60, 60, 67, .16);
-  --fill: rgba(118, 118, 128, .12);
-  --fill-2: rgba(118, 118, 128, .07);
-  --glass: rgba(251, 251, 253, .72);
-  --glass-strong: rgba(255, 255, 255, .78);
-  --glass-border: rgba(0, 0, 0, .07);
-  --sheet: rgba(242, 242, 247, .94);
-  --shadow-lg: 0 10px 34px rgba(0, 0, 0, .10), 0 1px 3px rgba(0, 0, 0, .06);
-  --green: #279f45; --red: #ff3b30; --orange: #ff9500; --gray: #8e8e93;
-  --danger-ink: #d70015;
-  --warning-ink: #8f4a00;
-  --switch-off: rgba(120, 120, 128, .20);
-  --accent: #0062cc;
-  --accent-ink: #ffffff;
+  --bg: #050505;                 /* void black — the screen behind everything */
+  --surface: #121212;            /* ROG graphite — cards, sheets, inputs */
+  --grouped: #080808;            /* recessed wells under grouped rows */
+  --label: #f5f5f7;
+  --secondary: #c8c8cd;
+  --tertiary: #ababb0;
+  --separator: rgba(196, 196, 202, .18);   /* thin silver divider */
+  --fill: rgba(118, 118, 128, .20);
+  --fill-2: rgba(118, 118, 128, .16);
+  --glass: rgba(14, 14, 16, .72);
+  --glass-strong: rgba(36, 36, 40, .82);
+  --glass-border: rgba(255, 255, 255, .10);
+  --sheet: rgba(22, 22, 24, .95);
+  --shadow-lg: 0 10px 34px rgba(0, 0, 0, .55), 0 1px 3px rgba(0, 0, 0, .45);
+  --green: #30c74f; --red: #ea4a42; --orange: #ff9f0a; --gray: #98989d;
+  --danger-ink: #ff9a94;
+  --warning-ink: #ffb84d;
+  --badge-ink: #0a0a0c;          /* glyphs sit dark on the bright status badges */
+  --switch-off: rgba(120, 120, 128, .32);
+  --accent: #ff4a55;             /* ROG red — the only accent (decision D5) */
+  --accent-ink: #0a0a0c;         /* ink on filled red buttons/bubbles */
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --glow: color-mix(in srgb, var(--accent) 45%, transparent);  /* restrained glow, focus/active only */
   --notice-bg: color-mix(in srgb, var(--orange) 14%, var(--surface));
   --error-bg: color-mix(in srgb, var(--red) 12%, var(--surface));
-  --backdrop: rgba(0, 0, 0, .22);
+  --backdrop: rgba(0, 0, 0, .55);
   --toolbar-h: 58px;
   --composer-h: 96px;
 }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #0a0a0c;
-  --surface: #1c1c1e;
-  --grouped: #000000;
-  --label: #f5f5f7;
-  --secondary: rgba(235, 235, 245, .62);
-  --tertiary: rgba(235, 235, 245, .58);
-  --separator: rgba(84, 84, 88, .55);
-  --fill: rgba(118, 118, 128, .26);
-  --fill-2: rgba(118, 118, 128, .16);
-  --glass: rgba(18, 18, 20, .70);
-  --glass-strong: rgba(36, 36, 40, .78);
-  --glass-border: rgba(255, 255, 255, .09);
-  --sheet: rgba(22, 22, 24, .94);
-  --shadow-lg: 0 10px 34px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .35);
-  --green: #2ba84a; --red: #ff453a; --orange: #ff9f0a; --gray: #98989d;
-  --danger-ink: #ff7d75;
-  --warning-ink: #ff9f0a;
-  --switch-off: rgba(120, 120, 128, .32);
-  --accent: #43a1ff;
-  --accent-ink: #0a0a0c;
-  --backdrop: rgba(0, 0, 0, .48);
-}
-/* Accent choices (values kept for saved-preference compatibility). */
-:root[data-accent="green"] { --accent: #1f7534; }
-:root[data-accent="violet"] { --accent: #8944ab; }
-:root[data-accent="amber"] { --accent: #bd3100; }
-:root[data-theme="dark"][data-accent="green"] { --accent: #50ae6b; }
-:root[data-theme="dark"][data-accent="violet"] { --accent: #bb85e8; }
-:root[data-theme="dark"][data-accent="amber"] { --accent: #ed7c3f; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
