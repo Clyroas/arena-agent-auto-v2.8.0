@@ -45,6 +45,13 @@ function animations(source) {
   return found;
 }
 
+test('the design language is dark-only: no light theme rules survive', () => {
+  // spec/rog-design-language.md D2 removed the light palette entirely. A resurrected
+  // [data-theme="light"] block would render an unchecked second design language that
+  // no contrast test looks at any more (palette-contrast.test.mjs pins the removal too).
+  assert.equal(css.includes('[data-theme="light"]'), false, 'no rule may target data-theme="light"');
+});
+
 test('braces are balanced', () => {
   let depth = 0;
   for (const [index, char] of [...css].entries()) {

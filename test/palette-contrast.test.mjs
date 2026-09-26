@@ -8,6 +8,11 @@ import { readFileSync } from 'node:fs';
 // every accent failed as text on its own tint. This file reads the tokens the panel actually uses out
 // of panel.css and checks the pairs the interface actually renders against WCAG AA (4.5:1 for text,
 // 3:1 for the graphics that carry state), compositing translucent colours the way Chrome will.
+//
+// v2.10.0 (spec/rog-design-language.md): the panel is dark-only ROG. The light palette and the four
+// selectable accents were removed by decision D1/D2/D5, so this file now checks one token set — the
+// :root block — over every surface the theme stacks. The pair list is unchanged in kind; only the
+// loop over themes/accents collapsed.
 const raw = readFileSync(new URL('../panel.css', import.meta.url), 'utf8');
 const css = raw.replace(/\/\*[\s\S]*?\*\//g, '');
 const TEXT = 4.5;
@@ -47,14 +52,12 @@ const shareOf = (token, colour) => {
   return Number(match[1]) / 100;
 };
 
-const light = blockOf(':root {');
-const dark = blockOf(':root[data-theme="dark"]');
-// Every accent the Appearance setting offers. Blue is the default in :root, so it has no override
-// block of its own; the other three carry one per theme.
-const accents = ['blue', 'green', 'violet', 'amber'].map(name => {
-  const lightBlock = css.includes(`:root[data-accent="${name}"]`) ? blockOf(`:root[data-accent="${name}"]`) : null;
-  const darkBlock = css.includes(`:root[data-theme="dark"][data-accent="${name}"]`) ? blockOf(`:root[data-theme="dark"][data-accent="${name}"]`) : null;
-  return { name, light: lightBlock?.get('--accent') || light.get('--accent'), dark: darkBlock?.get('--accent') || dark.get('--accent') };
+const theme = blockOf(':root {');
+// The dark-only contract: a second palette or an accent override would mean the old design language
+// survived somewhere the contrast rules above never look.
+test('the stylesheet is dark-only: no light palette and no accent overrides', () => {
+  assert.equal(css.includes('[data-theme="light"]'), false, 'the light theme was removed by spec decision D2');
+  assert.equal(css.includes('[data-accent='), false, 'the accent picker was removed by spec decision D5');
 });
 
 const PROBLEMS = [];
@@ -63,51 +66,48 @@ const describe = colour => {
   const { r, g, b } = rgb(colour);
   return '#' + [r, g, b].map(channel => Math.round(channel).toString(16).padStart(2, '0')).join('');
 };
-const pair = (theme, accent, label, fg, bg, min) => {
+const pair = (label, fg, bg, min) => {
   const ratio = contrast(fg, bg);
-  if (ratio + 0.005 < min) PROBLEMS.push(`${theme}/${accent} ${label}: ${ratio.toFixed(2)}:1 (needs ${min}) — ${describe(fg)} on ${describe(bg)}`);
+  if (ratio + 0.005 < min) PROBLEMS.push(`${label}: ${ratio.toFixed(2)}:1 (needs ${min}) — ${describe(fg)} on ${describe(bg)}`);
 };
-for (const [theme, base, accentsOf] of [['light', light, accent => accent.light], ['dark', dark, accent => accent.dark]]) {
-  for (const accent of accents) {
-    const tokens = new Map([...base, ['--accent', accentsOf(accent)]]);
-    const value = name => {
-      const found = tokens.get(name);
-      if (!found) { PROBLEMS.push(`${theme}/${accent.name} ${name} is not defined`); return 'rgba(0, 0, 0, 0)'; }
-      return found;
-    };
-    const over = (name, backdrop) => flatten(value(name), backdrop);
-    // Opaque surfaces, in the order the panel stacks them.
-    const bg = value('--bg'), surface = value('--surface');
-    const sheet = over('--sheet', bg), glass = over('--glass', bg), glassStrong = over('--glass-strong', bg);
-    const fillOnSurface = over('--fill', surface), fillOnBg = over('--fill', bg), fill2OnSurface = over('--fill-2', surface);
-    const notice = blend(value('--orange'), surface, shareOf('--notice-bg', 'orange'));
-    const error = blend(value('--red'), surface, shareOf('--error-bg', 'red'));
-    const accentSoft = blend(value('--accent'), surface, shareOf('--accent-soft', 'accent'));
+{
+  const value = name => {
+    const found = theme.get(name);
+    if (!found) { PROBLEMS.push(`${name} is not defined`); return 'rgba(0, 0, 0, 0)'; }
+    return found;
+  };
+  const over = (name, backdrop) => flatten(value(name), backdrop);
+  // Opaque surfaces, in the order the panel stacks them.
+  const bg = value('--bg'), surface = value('--surface');
+  const sheet = over('--sheet', bg), glass = over('--glass', bg), glassStrong = over('--glass-strong', bg);
+  const fillOnSurface = over('--fill', surface), fillOnBg = over('--fill', bg), fill2OnSurface = over('--fill-2', surface);
+  const notice = blend(value('--orange'), surface, shareOf('--notice-bg', 'orange'));
+  const error = blend(value('--red'), surface, shareOf('--error-bg', 'red'));
+  const accentSoft = blend(value('--accent'), surface, shareOf('--accent-soft', 'accent'));
 
-    for (const [name, surfaceValue] of [['bg', bg], ['surface', surface], ['sheet', sheet], ['glass', glass], ['glassStrong', glassStrong], ['fill', fillOnSurface], ['fill over background', fillOnBg], ['fill2', fill2OnSurface], ['notice', notice], ['error', error]])
-      pair(theme, accent.name, `--label on ${name}`, value('--label'), surfaceValue, TEXT);
-    for (const [name, surfaceValue] of [['bg', bg], ['surface', surface], ['sheet', sheet], ['glassStrong', glassStrong], ['fill', fillOnSurface], ['fill2', fill2OnSurface]])
-      pair(theme, accent.name, `--secondary on ${name}`, value('--secondary'), surfaceValue, TEXT);
-    for (const [name, surfaceValue] of [['bg', bg], ['surface', surface], ['sheet', sheet], ['glassStrong', glassStrong], ['fill2', fill2OnSurface]])
-      pair(theme, accent.name, `--tertiary on ${name}`, value('--tertiary'), surfaceValue, TEXT);
-    for (const [name, surfaceValue] of [['bg', bg], ['surface', surface], ['sheet', sheet], ['glassStrong', glassStrong], ['fill', fillOnSurface], ['fill over background', fillOnBg]])
-      pair(theme, accent.name, `--accent as text on ${name}`, value('--accent'), surfaceValue, TEXT);
-    pair(theme, accent.name, '--accent as text on --accent-soft', value('--accent'), accentSoft, TEXT);
-    pair(theme, accent.name, '--accent-ink on --accent', value('--accent-ink'), value('--accent'), TEXT);
-    pair(theme, accent.name, '--accent-ink on the imported bubble', value('--accent-ink'), blend(value('--accent'), value('--gray'), 0.78), TEXT);
-    for (const [name, surfaceValue] of [['surface', surface], ['bg', bg], ['sheet', sheet], ['glassStrong', glassStrong], ['fill', fillOnSurface], ['error', error]])
-      pair(theme, accent.name, `--danger-ink on ${name}`, value('--danger-ink'), surfaceValue, TEXT);
-    for (const [name, surfaceValue] of [['surface', surface], ['bg', bg], ['fill2', fill2OnSurface]])
-      pair(theme, accent.name, `--warning-ink on ${name}`, value('--warning-ink'), surfaceValue, TEXT);
-    // State graphics: the focus ring, the status dots and the two glyph inks on the mid-grey fills.
-    pair(theme, accent.name, '--accent vs --surface (ring/dot)', value('--accent'), surface, GRAPHIC);
-    pair(theme, accent.name, '--surface ink on --tertiary fill', surface, over('--tertiary', surface), GRAPHIC);
-    pair(theme, accent.name, '--surface ink on --secondary fill', surface, over('--secondary', surface), GRAPHIC);
-    pair(theme, accent.name, 'white glyph on the --green badge', '#ffffff', value('--green'), GRAPHIC);
-    pair(theme, accent.name, '--green dot on the live panel', value('--green'), fill2OnSurface, GRAPHIC);
-    pair(theme, accent.name, 'white glyph on the --red badge', '#ffffff', value('--red'), GRAPHIC);
-    pair(theme, accent.name, '--red glyph on the live panel', value('--red'), fill2OnSurface, GRAPHIC);
-  }
+  for (const [name, surfaceValue] of [['bg', bg], ['surface', surface], ['sheet', sheet], ['glass', glass], ['glassStrong', glassStrong], ['fill', fillOnSurface], ['fill over background', fillOnBg], ['fill2', fill2OnSurface], ['notice', notice], ['error', error]])
+    pair(`--label on ${name}`, value('--label'), surfaceValue, TEXT);
+  for (const [name, surfaceValue] of [['bg', bg], ['surface', surface], ['sheet', sheet], ['glassStrong', glassStrong], ['fill', fillOnSurface], ['fill2', fill2OnSurface]])
+    pair(`--secondary on ${name}`, value('--secondary'), surfaceValue, TEXT);
+  for (const [name, surfaceValue] of [['bg', bg], ['surface', surface], ['sheet', sheet], ['glassStrong', glassStrong], ['fill2', fill2OnSurface]])
+    pair(`--tertiary on ${name}`, value('--tertiary'), surfaceValue, TEXT);
+  for (const [name, surfaceValue] of [['bg', bg], ['surface', surface], ['sheet', sheet], ['glassStrong', glassStrong], ['fill', fillOnSurface], ['fill over background', fillOnBg]])
+    pair(`--accent as text on ${name}`, value('--accent'), surfaceValue, TEXT);
+  pair('--accent as text on --accent-soft', value('--accent'), accentSoft, TEXT);
+  pair('--accent-ink on --accent', value('--accent-ink'), value('--accent'), TEXT);
+  pair('--accent-ink on the imported bubble', value('--accent-ink'), blend(value('--accent'), value('--gray'), 0.78), TEXT);
+  for (const [name, surfaceValue] of [['surface', surface], ['bg', bg], ['sheet', sheet], ['glassStrong', glassStrong], ['fill', fillOnSurface], ['error', error]])
+    pair(`--danger-ink on ${name}`, value('--danger-ink'), surfaceValue, TEXT);
+  for (const [name, surfaceValue] of [['surface', surface], ['bg', bg], ['fill2', fill2OnSurface]])
+    pair(`--warning-ink on ${name}`, value('--warning-ink'), surfaceValue, TEXT);
+  // State graphics: the focus ring, the status dots and the two glyph inks on the mid-grey fills.
+  pair('--accent vs --surface (ring/dot)', value('--accent'), surface, GRAPHIC);
+  pair('--surface ink on --tertiary fill', surface, over('--tertiary', surface), GRAPHIC);
+  pair('--surface ink on --secondary fill', surface, over('--secondary', surface), GRAPHIC);
+  pair('badge ink on the --green badge', value('--badge-ink'), value('--green'), GRAPHIC);
+  pair('--green dot on the live panel', value('--green'), fill2OnSurface, GRAPHIC);
+  pair('badge ink on the --red badge', value('--badge-ink'), value('--red'), GRAPHIC);
+  pair('--red glyph on the live panel', value('--red'), fill2OnSurface, GRAPHIC);
 }
 
 test('every text and state-graphic pair the panel renders meets WCAG AA', () => {
@@ -115,9 +115,6 @@ test('every text and state-graphic pair the panel renders meets WCAG AA', () => 
 });
 
 test('the tokens the contrast rules depend on still exist', () => {
-  for (const token of ['--label', '--secondary', '--tertiary', '--accent', '--accent-ink', '--danger-ink', '--warning-ink', '--green', '--red', '--orange', '--gray', '--surface', '--bg', '--fill', '--fill-2', '--sheet', '--glass', '--glass-strong'])
-    assert.ok(light.get(token), `panel.css must define ${token} in the light theme`);
-  for (const token of ['--label', '--secondary', '--tertiary', '--accent', '--accent-ink', '--danger-ink', '--warning-ink'])
-    assert.ok(dark.get(token), `panel.css must define ${token} in the dark theme`);
-  assert.equal(accents.filter(accent => accent.light && accent.dark).length, 4, 'all four accent choices must exist in both themes');
+  for (const token of ['--label', '--secondary', '--tertiary', '--accent', '--accent-ink', '--badge-ink', '--danger-ink', '--warning-ink', '--green', '--red', '--orange', '--gray', '--surface', '--bg', '--fill', '--fill-2', '--sheet', '--glass', '--glass-strong'])
+    assert.ok(theme.get(token), `panel.css must define ${token} in :root`);
 });

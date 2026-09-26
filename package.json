@@ -9,7 +9,7 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "test": "node --test \"test/**/*.test.mjs\"",
+    "test": "node --test test/*.test.mjs",
     "check": "npm run lint && npm test",
     "build:presets": "node scripts/build-skill-presets.mjs",
     "test:browser": "playwright test",
