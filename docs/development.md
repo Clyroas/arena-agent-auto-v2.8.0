@@ -35,6 +35,7 @@ The suites cover the pure helpers plus the paths that used to be untestable:
 | `preferences.test.mjs` | Whitelist-normalization of theme/text-size/accent prefs |
 | `stylesheet.test.mjs` | The CSS "linter": custom-property typos, animations pointing at missing keyframes, unbalanced braces, motion only on `transform`/`opacity`/colour, and the reduced-motion escape hatch |
 | `version-sync.test.mjs` | Every version anchor matches the manifest; the manifest references only files that exist; permissions and CSP are exactly as intended |
+| `agent-skills.test.mjs` | Vendored addyosmani/agent-skills pack: 25 skills, frontmatter names, shared checklists, resolving `references/` links, not packed |
 
 ### The version-bump checklist
 
@@ -91,6 +92,17 @@ every pull request, and on demand. Lint catches the mistakes that break the pane
   hatch. See the motion table in [STABILITY-REVIEW.md](../STABILITY-REVIEW.md).
 - **Storage is appearance-only.** Anything that smells like chat content, credentials, or telemetry
   does not get persisted — see the table in [architecture.md](architecture.md).
+
+## Agent skills
+
+[addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) is vendored under [`.agents/`](../.agents/README.md) so coding agents follow the same spec → plan → build → verify → review → ship lifecycle. The files are Markdown workflows, not extension code:
+
+- Skills: `.agents/skills/<name>/SKILL.md` (Agent Skills spec layout)
+- Shared checklists: `.agents/references/`
+- Lifecycle commands: `.agents/commands/`
+- How agents should load them, plus this repo's overrides: [AGENTS.md](../AGENTS.md)
+
+Keep them off `extension-files.json`. Pin and refresh notes live in `.agents/SOURCE.md`. `test/agent-skills.test.mjs` checks the 25 skills, frontmatter names, checklists, and that relative `references/` links still resolve after a refresh.
 
 ## Browser regressions and release artifacts (2.8.2)
 
