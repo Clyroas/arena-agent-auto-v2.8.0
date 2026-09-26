@@ -121,6 +121,10 @@ npm run package:extension  # load dist/arena-auto-chat-2.8.3 unpacked, or use th
 
 Browser tests require a working Chromium installation. The initial implementation sandbox could not download/start that browser, so do not confuse the passing Node suite with verified live-site compatibility. CI installs Chromium separately. Packaging uses `extension-files.json` and excludes dependencies, tests, dev preview, and repository metadata.
 
+## Agent skills
+
+Coding agents working in this repository load [Addy Osmani's agent-skills](https://github.com/addyosmani/agent-skills) pack (25 lifecycle skills, MIT) from [`.agents/`](.agents/README.md). Discovery is the portable [Agent Skills](https://agentskills.io/specification) path (`.agents/skills/<name>/SKILL.md`); [AGENTS.md](AGENTS.md) tells agents without a skill tool to open those files. Shared checklists stay in `.agents/references/` so the pack's relative links resolve. None of this is packed into the extension.
+
 ## Repository map
 
 | Path | Role |
@@ -139,3 +143,5 @@ Browser tests require a working Chromium installation. The initial implementatio
 | `test/` | Node/jsdom regressions plus opt-in Chromium extension fixtures |
 | `STABILITY-REVIEW.md` | The end-to-end stability pass: fixes, additions, open findings |
 | `docs/` | Architecture and development guides |
+| `AGENTS.md` | How coding agents load the vendored skill pack and the repo-specific overrides |
+| `.agents/` | Vendored agent-skills pack (skills, shared checklists, lifecycle commands) — not shipped |
