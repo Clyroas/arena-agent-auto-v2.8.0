@@ -8,6 +8,8 @@ Interface revamp on 2.9.0. No protocol change — the version stays 2.9.0, so Ar
 - The mode chip and a minimized notice sit in the composer dock. They used to float above it, outside the height the transcript measures, and could cover the last reply and the jump control.
 - Working, empty, and assistant marks use the accent you chose. The spinning rainbow edge is gone, so a live reply stays readable and the focus ring is the thing that moves.
 - Narrow panels stack the connection actions. A long error cannot take more than a short slice of the chat. Staged files show a count on Attach. The composer only remeasures when the draft or its width changes, so a streaming reply does not thrash layout.
+- Narrow panels stack the connection actions. A long error cannot take more than a short slice of the chat. Staged files show a count on Attach. The composer only remeasures when the draft or its width changes, so a streaming reply does not thrash layout.
+- A **Task prompts** chip in the composer dock opens the 34 workflows of the vendored `agent-skills` pack as ready-to-send drafts — the 25 skills grouped by lifecycle phase plus the 9 `/spec` `/plan` `/build` `/test` `/review` `/ship` entry points. Choosing one fills the composer with that workflow and a `My task:` line; nothing is sent, and the existing one-click Send is still the only way out. `skill-presets.js` is generated from `.agents/` by `npm run build:presets` and is the only part of the pack that ships, so a pack refresh cannot leave the panel advertising stale workflows.
 
 ## 2.9.0 — 2026-09-26
 

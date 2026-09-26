@@ -39,6 +39,8 @@ The suites cover the pure helpers plus the paths that used to be untestable:
 | `panel-lifecycle.test.mjs` | The real panel bootstrap and handlers (attachments, recovery, model confirmation, pickers) plus the panel-wide regressions: a cleared session leaves no draft counter behind, and option rows keep their button semantics inside the list |
 | `version-sync.test.mjs` | Every version anchor matches the manifest; the manifest references only files that exist; permissions and CSP are exactly as intended |
 | `agent-skills.test.mjs` | Vendored addyosmani/agent-skills pack: 25 skills, frontmatter names, shared checklists, resolving `references/` links, not packed |
+| `skill-presets.test.mjs` | The generated task-prompt library: it is byte-for-byte what the current `.agents/` pack derives, covers every skill and command, groups them by the phase `AGENTS.md` lists, and refuses to overflow the draft instead of truncating |
+| `panel-presets.test.mjs` | The real panel's Task prompts chip and dialog: grouping, search, empty state, insertion into a draft, the `PRESET_TOO_LONG` refusal, one-dialog-at-a-time, and that inserting never sends |
 
 ### The version-bump checklist
 
@@ -106,6 +108,14 @@ every pull request, and on demand. Lint catches the mistakes that break the pane
 - How agents should load them, plus this repo's overrides: [AGENTS.md](../AGENTS.md)
 
 Keep them off `extension-files.json`. Pin and refresh notes live in `.agents/SOURCE.md`. `test/agent-skills.test.mjs` checks the 25 skills, frontmatter names, checklists, and that relative `references/` links still resolve after a refresh.
+
+The one exception is the generated `skill-presets.js`, which *is* packaged so the side panel can offer the same workflows as ready-to-send drafts:
+
+```bash
+npm run build:presets    # regenerate skill-presets.js from .agents/
+```
+
+The script is a pure module (`scripts/build-skill-presets.mjs`); only its CLI branch writes. `test/skill-presets.test.mjs` calls the same generator and compares the output to the committed file, so refreshing the pack without regenerating fails the suite instead of shipping stale prompts.
 
 ## Browser regressions and release artifacts (2.8.2)
 

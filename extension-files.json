@@ -20,6 +20,7 @@
   "theme.js",
   "customization.js",
   "recent-models.js",
+  "skill-presets.js",
   "screenshot.js",
   "floating-window.js",
   "window-geometry.js",

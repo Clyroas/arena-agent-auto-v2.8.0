@@ -6,6 +6,7 @@ import { AgentClient, normalizePickers } from './agent-client.js';
 import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl, withTimeout, capabilitySummary } from './core.js';
 import { liveStatus, questionState } from './live-status.js';
 import { recentModels, rememberModel } from './recent-models.js';
+import { SKILL_PRESETS, PRESET_GROUPS, findPresets, composePresetText } from './skill-presets.js';
 import { findLinks, hostLabel, captureLink, hasShotAccess, requestShotAccess, removeShotAccess } from './screenshot.js';
 import './attachment-policy.js'; // Registers ArenaAgentAttachments (same text the page adapter loads).
 const { ATTACHMENT_POLICY, bytesToBase64, formatBytes } = globalThis.ArenaAgentAttachments;
@@ -199,6 +200,7 @@ function render() {
   $('history-import-note').textContent = imported ? `${imported} imported from the Arena page` : 'Read-only · from this Arena chat';
   renderModelChip();
   renderPickerBar();
+  renderPresetChip();
   conversation.render(turns, pending, state);
   updateLiveStatus();
   fitPrompt();
@@ -486,6 +488,92 @@ $('branch-chip').addEventListener('click', () => openPickerDialog('branch'));
 $('picker-close').addEventListener('click', () => $('picker-dialog').close());
 $('picker-dialog').addEventListener('close', endPickerDialog);
 $('picker-search').addEventListener('input', renderPickerDialog);
+
+// ---- Ready-made task prompts from the vendored agent-skills pack (v2.9.0) ---------------------
+// The pack guides coding agents in this repository but is never shipped in the extension (AGENTS.md),
+// so scripts/build-skill-presets.mjs derives skill-presets.js from it. Choosing a preset only writes
+// into the composer: the single-click, no-retry Send below stays the only way out, and nothing here
+// is stored, sent or retried.
+function renderPresetChip() {
+  const chip = $('presets-chip');
+  chip.hidden = $('prompt').disabled; // nothing to insert into a draft you cannot type in
+  chip.disabled = busy || !!pending || $('presets-dialog').open;
+  chip.title = `Insert a ready-made task prompt · ${SKILL_PRESETS.length} workflows from the agent-skills pack`;
+  // A modal dialog over a composer you can no longer type in would only trap focus.
+  if ($('presets-dialog').open && $('prompt').disabled) closePresetsDialog();
+}
+function presetGroupHeading(text) {
+  const label = document.createElement('p'); label.className = 'model-group'; label.textContent = text;
+  label.setAttribute('role', 'presentation'); return label;
+}
+function presetOptionRow(preset, draft) {
+  // Same row/button split as the model and picker lists: the row is the list item, the button is the
+  // control, so a screen reader still announces something to activate.
+  const row = document.createElement('div'); row.className = 'model-row'; row.setAttribute('role', 'listitem');
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'model-option'; button.dataset.preset = preset.id;
+  button.setAttribute('aria-current', String(draft.includes(preset.prompt)));
+  const name = document.createElement('span'); name.className = 'model-option-name presets-label'; name.textContent = preset.label;
+  const meta = document.createElement('span'); meta.className = 'model-option-meta presets-summary'; meta.textContent = preset.summary;
+  button.append(name, meta);
+  button.addEventListener('click', () => insertPreset(preset));
+  row.append(button);
+  return row;
+}
+function renderPresetList() {
+  if (!$('presets-dialog').open) return;
+  const draft = $('prompt').value, shown = findPresets($('presets-search').value);
+  const rows = [];
+  for (const group of PRESET_GROUPS) {
+    const inGroup = shown.filter(preset => preset.group === group);
+    if (!inGroup.length) continue;
+    rows.push(presetGroupHeading(group), ...inGroup.map(preset => presetOptionRow(preset, draft)));
+  }
+  $('presets-list').replaceChildren(...rows);
+  if (!shown.length) {
+    const empty = document.createElement('p'); empty.className = 'model-empty'; empty.setAttribute('role', 'presentation');
+    empty.textContent = 'No prompt matches that search.'; $('presets-list').append(empty);
+  }
+  $('presets-status').textContent = shown.length
+    ? `${shown.length} of ${SKILL_PRESETS.length} prompts · choosing one fills your draft`
+    : '';
+}
+function closePresetsDialog() {
+  try { $('presets-dialog').close(); } catch { /* already closed */ }
+}
+function openPresetsDialog() {
+  const chip = $('presets-chip');
+  // One modal dialog at a time, and never over a draft that cannot be typed in.
+  if (chip.disabled || chip.hidden || document.querySelector('dialog[open]')) return;
+  $('presets-search').value = '';
+  try { $('presets-dialog').showModal(); } catch { /* already closing */ }
+  // You open this dialog to find a workflow, so the search field takes the focus — not Done.
+  $('presets-search').focus({ preventScroll: true });
+  renderPresetList(); render();
+}
+function insertPreset(preset) {
+  const field = $('prompt');
+  if (field.disabled) return;
+  const composed = composePresetText(field.value, preset, PROMPT_LIMIT);
+  if (!composed.ok) {
+    // Fail closed and visibly: a silently truncated workflow prompt is worse than no prompt.
+    notice(`PRESET_TOO_LONG: “${preset.label}” needs ${composed.overflow} more characters than the ${PROMPT_LIMIT.toLocaleString('en-US')}-character limit allows. Shorten your draft first; nothing was inserted.`);
+    return;
+  }
+  field.value = composed.text;
+  // The draft's own listeners (auto-grow, counter, link chips) run on a real input event, so the
+  // composer ends up in exactly the state it would be in if you had typed this yourself.
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  field.focus({ preventScroll: true });
+  field.setSelectionRange(field.value.length, field.value.length);
+  closePresetsDialog();
+  notice(`Inserted the “${preset.label}” prompt. Add your task, then press Send — nothing was sent.`);
+  render();
+}
+$('presets-chip').addEventListener('click', openPresetsDialog);
+$('presets-close').addEventListener('click', closePresetsDialog);
+$('presets-search').addEventListener('input', renderPresetList);
+$('presets-dialog').addEventListener('close', () => { $('presets-search').value = ''; render(); });
 
 async function refresh() {
   const selected = $('tabs').value, tabs = await rpc('LIST_TABS');

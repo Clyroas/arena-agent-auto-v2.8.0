@@ -8,6 +8,7 @@ import * as screenshots from '../screenshot.js';
 import { normalizePickers } from '../agent-client.js';
 import { liveStatus, questionState } from '../live-status.js';
 import { TabAwakeLease } from '../tab-awake.js';
+import { SKILL_PRESETS, PRESET_GROUPS, findPresets, composePresetText } from '../skill-presets.js';
 
 // Exercise the real panel bootstrap/handlers against its actual markup. Presentation and Chrome are
 // replaced here; the separate browser suite uses real extension worlds, native inputs and ports.
@@ -34,7 +35,9 @@ async function open({ captureLink = async () => {}, send = async () => {}, picke
     AgentClient: class {
       constructor() { this.ready = true; this.uploadKind = 'input'; this.readiness = Promise.resolve(); }
       close() { this.ready = false; }
-    }
+    },
+    // The generated task-prompt library panel.js imports (its imports are stripped above).
+    SKILL_PRESETS, PRESET_GROUPS, findPresets, composePresetText
   });
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
