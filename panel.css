@@ -141,6 +141,11 @@ select option { background: var(--surface); color: var(--label); }
 }
 .toolbar-button:hover:not(:disabled) { background: var(--fill); filter: none; }
 .toolbar-button svg { width: 19px; height: 19px; }
+/* Toolbar reconnect: rendered only in the error state, so it carries the pill's red treatment instead
+   of the accent — one glance says "stopped", the glyph says "retry". The hover keeps the verified
+   --danger-ink on --error-bg pair; only the standard press darkening is added. */
+.toolbar-button.reconnect { color: var(--danger-ink); background: var(--error-bg); }
+.toolbar-button.reconnect:hover:not(:disabled) { background: var(--error-bg); filter: brightness(.96); }
 .status-pill {
   flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px 0 9px; border-radius: 999px;
   background: var(--fill); color: var(--label); font-size: 12px; font-weight: 500; max-width: 46vw;

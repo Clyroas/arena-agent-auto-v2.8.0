@@ -35,6 +35,7 @@ async function open({ captureLink = async () => {}, send = async () => {}, picke
     AgentClient: class {
       constructor() { this.ready = true; this.uploadKind = 'input'; this.readiness = Promise.resolve(); }
       close() { this.ready = false; }
+      watch() {}
     },
     // The generated task-prompt library panel.js imports (its imports are stripped above).
     SKILL_PRESETS, PRESET_GROUPS, findPresets, composePresetText
@@ -45,6 +46,7 @@ async function open({ captureLink = async () => {}, send = async () => {}, picke
   w.eval(`${source}\nwindow.testPanel = {
     stageFiles, clear, screenshotLink, cancelScreenshot, handleEvent, render,
     setup(connection) { state = 'ready'; client = connection; tab = { id: 1, url: AGENT_URL }; setSheet(false); render(); },
+    setState(next) { state = next; render(); },
     setCapabilities(capabilities) { client.capabilities = capabilities; render(); },
     setModel(expected, actual) { requestedModel = expected; client.model = actual; render(); },
     setTurn(turn) { turns.push(turn); pending = turn; state = 'waiting'; },
@@ -167,6 +169,82 @@ test('same-conversation reconnect keeps the local draft and history without send
     assert.equal(page.ui.current.turns[0], turn);
     assert.equal(page.w.document.getElementById('prompt').value, 'Unsent local draft');
     assert.equal(sends, 0);
+  } finally { page.close(); }
+});
+
+// ---- Toolbar reconnect button (Task 1: error-state slice) ---------------------------------------
+test('the toolbar reconnect button is offered only where a reconnect is possible and runs the same flow', async () => {
+  let sends = 0;
+  const page = await open({ send: async () => { sends++; } });
+  try {
+    const button = page.w.document.getElementById('reconnect-button');
+    assert.equal(button.hidden, true, 'no reconnect affordance while the connection is healthy');
+    page.ui.setState('error');
+    assert.equal(button.hidden, false, 'the error state offers one-click reconnect');
+    button.click();
+    await tick(); await tick();
+    assert.equal(page.ui.current.state, 'ready', 'the button runs the same reconnect action as Settings → Reconnect');
+    assert.equal(button.hidden, true, 'the affordance disappears once the session is healthy again');
+    assert.equal(sends, 0);
+  } finally { page.close(); }
+});
+
+test('the toolbar reconnect button asks before reattaching a tracked turn and resends nothing', async () => {
+  let sends = 0;
+  const page = await open({ send: async () => { sends++; } });
+  try {
+    const turn = { id: 'one', prompt: 'hello', reply: '', status: 'waiting', userMessageId: 'm1', attachments: [] };
+    page.ui.setTurn(turn);
+    page.ui.setState('error');
+    page.w.document.getElementById('reconnect-button').click();
+    await tick();
+    assert.equal(page.w.document.getElementById('confirm-dialog').open, true, 'a tracked turn keeps its same-conversation confirmation');
+    assert.match(page.w.document.getElementById('dialog-title').textContent, /Reattach without resending/);
+    page.w.document.getElementById('dialog-cancel').click();
+    await tick(); await tick();
+    assert.equal(page.ui.current.pending, turn, 'declining leaves the turn tracked locally');
+    assert.equal(page.ui.current.state, 'error');
+    assert.equal(sends, 0);
+  } finally { page.close(); }
+});
+
+test('confirming the toolbar reconnect resumes the tracked turn without resending', async () => {
+  let sends = 0;
+  const page = await open({ send: async () => { sends++; } });
+  try {
+    const turn = { id: 'one', prompt: 'hello', reply: '', status: 'waiting', userMessageId: 'm1', attachments: [] };
+    page.ui.setTurn(turn);
+    page.ui.setState('error');
+    page.w.document.getElementById('reconnect-button').click();
+    await tick();
+    page.w.document.getElementById('dialog-ok').click();
+    await tick(); await tick();
+    assert.equal(page.ui.current.state, 'waiting');
+    assert.equal(page.ui.current.pending, turn);
+    assert.equal(turn.resumed, true);
+    assert.equal(sends, 0);
+  } finally { page.close(); }
+});
+
+test('an error state with no known tab offers no reconnect button', async () => {
+  const page = await open();
+  try {
+    page.ui.clear();
+    page.ui.setState('error');
+    assert.equal(page.w.document.getElementById('reconnect-button').hidden, true, 'with no tab there is nothing to reconnect to');
+  } finally { page.close(); }
+});
+
+test('in the error state the pill and the gear still open Settings, not a reconnect', async () => {
+  const page = await open();
+  try {
+    page.ui.setState('error');
+    page.w.document.getElementById('status-pill').click();
+    assert.equal(page.w.document.getElementById('settings-sheet').dataset.open, 'true', 'the pill keeps opening Settings');
+    page.w.document.getElementById('sheet-done').click();
+    page.w.document.getElementById('settings-button').click();
+    assert.equal(page.w.document.getElementById('settings-sheet').dataset.open, 'true', 'the gear keeps opening Settings');
+    assert.equal(page.ui.current.state, 'error', 'neither toolbar control reconnects; the new button owns that path');
   } finally { page.close(); }
 });
 

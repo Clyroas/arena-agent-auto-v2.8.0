@@ -149,6 +149,9 @@ function notice(text = '') {
 $('notice-minimize').addEventListener('click', () => { clearTimeout(noticeTimer); setNoticeOpen(false); $('notice-dot').focus({ preventScroll: true }); });
 $('notice-dot').addEventListener('click', () => { $('notice-dot').classList.remove('fresh'); setNoticeOpen(true); armNoticeTimer(); });
 $('notice').addEventListener('mouseleave', armNoticeTimer);
+// A reconnect is possible exactly when the session is stopped on a known Arena tab and nothing else is
+// running: the toolbar button shows itself then, and only then.
+const canReconnect = () => state === 'error' && !!tab && !busy;
 function render() {
   // Semantic capability / drift check for the connected tab (see core.js capabilitySummary). A page that
   // no longer exposes a control the adapter drives blocks Send with a coded reason instead of failing
@@ -156,6 +159,7 @@ function render() {
   const drift = client?.ready ? capabilitySummary(client.capabilities) : null;
   $('status').textContent = labels[state]; $('status').dataset.state = state;
   $('status-pill').title = state === 'error' ? 'Stopped. Check the Arena tab, then open connection settings.' : `${labels[state]}. Open connection settings.`;
+  $('reconnect-button').hidden = !canReconnect();
   document.body.dataset.working = String(!!pending && pending.status !== 'error');
   document.body.dataset.connected = String(!!client?.ready);
   $('connected').hidden = !tab;
@@ -884,12 +888,16 @@ async function connect(id) {
   state = 'ready'; $('connection-details').open = false; setSheet(false); keepTabAwake(selected.id, true);
   notice('Connected. Send a message below — replies appear right here.');
 }
-function action(id, fn) {
-  $(id).addEventListener('click', async () => {
-    if (busy || switching) return;
-    // A coded error stays until the user minimizes it (see noticeKind/setNoticeOpen above): an action
-    // click must not wipe the message the user is still reading. Anything else makes way for the result.
-    busy = true; if ($('notice').dataset.kind !== 'error') notice(); render(); const operation = ++actionId;
+function action(id, fn) { $(id).addEventListener('click', () => runAction(fn)); }
+// One action wrapper, shared by every control that runs an action: the sheet's buttons and the
+// toolbar reconnect button. Keeping it here (rather than clicking a sheet button, which sits inside
+// the inert sheet and would not fire in a real browser) means one flow, one busy/actionId guard.
+function runAction(fn) {
+  if (busy || switching) return;
+  // A coded error stays until the user minimizes it (see noticeKind/setNoticeOpen above): an action
+  // click must not wipe the message the user is still reading. Anything else makes way for the result.
+  busy = true; if ($('notice').dataset.kind !== 'error') notice(); render(); const operation = ++actionId;
+  (async () => {
     try { await fn(); }
     catch (error) {
       // Never convert a failure into manual mode or request pasted replies.
@@ -897,7 +905,7 @@ function action(id, fn) {
         if (pending || !client?.ready) state = 'error'; if (pending) pending.status = 'error'; notice(error.message || 'Unexpected extension error. Check Arena before resending.');
       }
     } finally { if (operation === actionId) { busy = false; render(); } }
-  });
+  })();
 }
 $('connection-cancel').addEventListener('click', () => {
   if (!['connecting', 'reconnecting'].includes(state)) return;
@@ -942,7 +950,10 @@ action('disconnect', async () => {
   if (!await askClear('Disconnect and clear this panel? Any request already accepted by Arena may continue there.')) return;
   clear(); await refresh(); notice('Disconnected. The local session was cleared; Arena history is unchanged.');
 });
-action('reconnect', async () => {
+// The one reconnect flow: Settings → Reconnect and the toolbar reconnect button both run it through
+// runAction, so the same-conversation confirmations and the "nothing is resent" guarantees are shared
+// rather than re-implemented per control.
+const reconnect = async () => {
   if (!tab) return;
   const id = tab.id, expectedUrl = tab.url, operation = actionId;
   const current = await rpc('GET_TAB', { tabId: id });
@@ -964,7 +975,10 @@ action('reconnect', async () => {
     client.watch(tracked.id, tracked.prompt, tracked.userMessageId, tab.url, !!tracked.attachments?.length, tracked.questionRowIds);
   }
   notice('Reattached to the same conversation. Your local chat and draft are kept; nothing was resent.');
-});
+};
+action('reconnect', reconnect);
+// Toolbar reconnect: offered exactly when a reconnect is possible (stopped on a known tab, idle).
+$('reconnect-button').addEventListener('click', () => { if (canReconnect()) runAction(reconnect); });
 
 action('prepare', async () => {
   if (shotOperation || requestedModel || switching) throw new Error('Finish or cancel the screenshot and confirm the selected model before sending.');
