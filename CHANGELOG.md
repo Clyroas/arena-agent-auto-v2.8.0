@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.9.0 — 2026-09-26
+
+Agent Mode **repository & branch pickers**, mirrored from Arena's own composer. Reload the extension **and Arena tabs** after updating (older adapters are rejected by the version handshake).
+
+### Added
+
+- When Arena's Agent Mode shows its repository and branch pickers (its GitHub integration), the panel mirrors both buttons beside its composer — same icons, same current values — and hides them on Direct chats and pages without them.
+- Opening a chip opens **Arena's own picker** in the Arena tab and lists its options in the panel; searching in the panel only filters that list. Choosing an option clicks Arena's option row **exactly once** (exact-match only; unknown, duplicate-named or unavailable options are refused with a coded error and nothing is clicked) and the change is confirmed from what the trigger button then shows — never from the click alone. Cancelling dismisses Arena's picker with one Escape, and a picker that will not close is reported instead of forced.
+- The pickers are recognised by their exact icon geometry from Arena's markup plus the Radix trigger shape; a redesigned picker becomes a named "not showing" state, not a guessed button. Two visible copies of one picker are ambiguity and are refused.
+- A Send is refused with `PICKER_OPEN` while Arena's picker is open, and picker actions are refused with `PICKER_BUSY` while a turn is being tracked, so the two never interleave on the page. Losing the panel connection closes a picker it left open (one best-effort Escape).
+- Wire: `PICKER` port requests (`open`/`pick`/`close`) and `PICKER_STATE`/`PICKER_ERROR` frames, each tied to one action id so a stale dialog can never act as the current one; picker state rides along on `READY`/`MODEL_INFO` as normalized `repoPickers`. No new permissions, no new storage, no GitHub requests — everything goes through Arena's own page.
+
+### Validation
+
+- New suites against the real adapter and content script under jsdom, built from the supplied Arena trigger markup: recognition (including decoys, dialog-scoped and duplicate triggers), option reading, one-click picking and refusal paths, Escape dismissal, `PICKER_BUSY`/`PICKER_OPEN`, stale action ids, disconnect cleanup; plus panel tests for the chips, dialog, filtering, confirmation and Send blocking (196 Node/jsdom tests, ESLint clean). Live-site behaviour of Arena's picker popover still needs an authorized smoke test, like the rest of the extension.
+
 ## 2.8.3 — 2026-09-25
 
 Resume fix for the security-verification pause added in 2.8.2. Reload the extension **and Arena tabs** after updating.

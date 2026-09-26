@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '2.8.3';
+  const VERSION = '2.9.0';
   const runtime = chrome.runtime;
   const previous = globalThis.__ARENA_AGENT_REGISTRATION__;
   if (previous?.version === VERSION && previous.isAlive?.()) return;
@@ -8,12 +8,14 @@
   const D = globalThis.ArenaAgentDOM;
   let owner = null, transaction = null, lastHeartbeat = 0, timer = null, observer = null;
   let scanQueued = false, scanTimer = null, lastScanAt = 0;
+  // The repo/branch picker session the panel opened: { actionId, kind }. Only ever one at a time.
+  let picker = null;
   // Liveness comes from the port itself (it closes with the panel or page). The lease only guards
   // against a silent panel, and is long enough for Chrome's once-a-minute timer throttling.
   const LEASE_MS = 5 * 60 * 1000;
   const consumed = new Set();
   const documentId = crypto.randomUUID();
-  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.8.3' }); } catch { cleanup(); } }
+  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.9.0' }); } catch { cleanup(); } }
   const STAGE_TIMEOUT_MS = 10000;
   function clearStaging(tx) {
     if (!tx) return;
@@ -45,6 +47,12 @@
     clearTimeout(scanTimer); scanTimer = null; scanQueued = false;
     document.removeEventListener('click', onPageClick, true);
     clearInterval(timer); timer = null;
+    // The panel is gone: if it left one of Arena's pickers open, try once to close it so the tab is not
+    // stranded with a popover over its composer. Best effort only — never throws, never retries.
+    if (picker) {
+      const kind = picker.kind; picker = null;
+      try { const dialog = D.pickerDialog(kind); if (dialog) D.closePickerDialog(dialog); } catch { /* best effort */ }
+    }
     const old = owner; owner = null;
     try { old?.disconnect(); } catch { /* already closed */ }
   }
@@ -472,6 +480,11 @@
       if (!D.samePage(message.url, location.href)) D.fail('CONVERSATION_CHANGED', 'The tab URL changed. Reconnect before sending.');
       await waitOutSecurity(tx);
       if (transaction !== tx || !owner) return;
+      // An open repo/branch picker covers the composer and is a user's in-progress choice; it is never
+      // dismissed from under them. Close it (here or in Arena), then send.
+      const openPickers = D.pickersOpen?.() || [];
+      if (openPickers.length)
+        D.fail('PICKER_OPEN', `Arena’s ${openPickers.map(pickerName).join(' and ')} picker is open. Close it before sending; nothing was sent and no Send click was attempted.`);
       const prepared = await prepareComposer(tx);
       if (!prepared || transaction !== tx || !owner) return;
       D.checkBlocks();
@@ -527,12 +540,124 @@
     // An Arena dialog over the message box (the message box itself is otherwise fine).
     let blocked = '';
     try { D.composer(); } catch (e) { if (e.code === 'ARENA_DIALOG_OPEN') blocked = e.message; }
-    return { pageKind, model: pageKind === 'direct' ? D.currentModel() : '', models, blocked, capabilities: capabilityInfo() };
+    return { pageKind, model: pageKind === 'direct' ? D.currentModel() : '', models, blocked, capabilities: capabilityInfo(), repoPickers: freshPickers() };
   }
   // The named capabilities Arena currently exposes. Diagnostic only: a failure here must never stop an
   // otherwise usable connection, so it collapses to null and the panel says "not reported".
   function capabilityInfo() {
     try { return D.capabilities?.() || null; } catch { return null; }
+  }
+  // ---- Repo & branch pickers (v2.9.0) ---------------------------------------------------------
+  // Arena's Agent Mode can work on a GitHub repository; its repository and branch pickers sit beside the
+  // composer. The panel mirrors them, and every panel action drives Arena's own controls: one click to
+  // open, one exact-match click to choose, one Escape to close, each verified from what the page then
+  // shows. There is no GitHub API here and nothing is sent to Arena. Pickers only work while idle — a
+  // running turn refuses picker actions (PICKER_BUSY) and an open picker refuses a Send (PICKER_OPEN) —
+  // so the two never interleave on the same page.
+  const PICKER_OPEN_MS = 5000, PICKER_PICK_MS = 8000, PICKER_CLOSE_MS = 3000;
+  const pickerName = kind => (kind === 'repo' ? 'repository' : 'branch');
+  function freshPickers() { try { return D.repoInfo?.() || null; } catch { return null; } }
+  function pickerError(actionId, kind, code, message, clicked = false) {
+    emit({ type: 'PICKER_ERROR', actionId, kind, code, message, clicked, repoPickers: freshPickers() });
+  }
+  // After a pick, the trigger label is the only confirmation accepted: Arena's popover closed AND its
+  // button now shows the chosen value. Anything else is reported unconfirmed — never re-clicked.
+  async function pickFromPicker(kind, actionId, value) {
+    if (!picker || picker.kind !== kind || picker.actionId !== actionId)
+      D.fail('PICKER_STALE', 'This picker session is no longer current. Close the dialog and open the picker again.');
+    if (typeof value !== 'string' || !value.trim() || value.length > 120)
+      D.fail('INVALID_PICK', 'Choose one of the options Arena is currently showing.');
+    const dialog = D.pickerDialog(kind);
+    if (!dialog) { picker = null; D.fail('PICKER_CLOSED', 'Arena’s picker is no longer open. Nothing was clicked.'); }
+    const confirmFail = (code, message) => { const error = new D.DomError(code, message); error.pickerClicked = true; throw error; };
+    D.pickPickerOption(dialog, value); // throws before any click; clicks exactly once otherwise
+    const want = D.normalize(value);
+    const deadline = Date.now() + PICKER_PICK_MS;
+    for (;;) {
+      await sleep(150);
+      if (transaction || !owner) return; // a takeover ended this session; nothing more happens here
+      if (!D.pickerDialog(kind)) {
+        const label = D.pickerTriggers()[kind]?.label || '';
+        if (D.normalize(label) === want) {
+          picker = null;
+          emit({ type: 'PICKER_STATE', actionId, kind, phase: 'done', value: label, repoPickers: freshPickers() });
+          return;
+        }
+        if (Date.now() >= deadline) { picker = null; confirmFail('PICK_NOT_CONFIRMED', `Arena closed its ${pickerName(kind)} picker, but its button now shows “${label || 'nothing'}” instead of “${want}”. The option was clicked once; check the Arena tab. It will not be retried.`); }
+      } else if (Date.now() >= deadline) {
+        confirmFail('PICK_NOT_CONFIRMED', `Arena’s ${pickerName(kind)} picker did not close after the option was clicked. The choice was attempted once; check the Arena tab. It will not be retried.`);
+      }
+    }
+  }
+  async function openPicker(kind, actionId) {
+    const triggers = D.pickerTriggers();
+    if (triggers.ambiguous)
+      D.fail('PICKER_AMBIGUOUS', 'Multiple repo/branch pickers are visible on this page. The extension refuses to guess which one to drive; pick in the Arena tab.');
+    const trigger = triggers[kind];
+    if (!trigger)
+      D.fail('PICKER_UNAVAILABLE', `Arena is not showing its ${pickerName(kind)} picker on this page. ${kind === 'branch' ? 'Choose a repository first — ' : ''}Connect or change it in the Arena tab.`);
+    // Already open (a Radix trigger that is already expanded would toggle closed on a second click):
+    // adopt the open picker and report its current list instead of clicking.
+    let dialog = D.pickerDialog(kind);
+    if (!dialog) {
+      if (!D.enabled(trigger.el) || trigger.el.closest('[inert]'))
+        D.fail('PICKER_DISABLED', `Arena’s ${pickerName(kind)} picker is not available right now. Choose in the Arena tab.`);
+      trigger.el.click(); // one click; never retried
+      const deadline = Date.now() + PICKER_OPEN_MS;
+      while (!(dialog = D.pickerDialog(kind))) {
+        if (transaction || !owner) return; // a Send or takeover took over mid-wait
+        if (Date.now() >= deadline)
+          D.fail('PICKER_NOT_OPENED', `Arena did not open its ${pickerName(kind)} picker. Nothing was retried; check the Arena tab and open it there if needed.`);
+        await sleep(150);
+      }
+    }
+    picker = { actionId, kind };
+    // An unreadable list leaves the popover open for the user; the session stays so Close still works.
+    const list = D.readPickerOptions(dialog);
+    emit({ type: 'PICKER_STATE', actionId, kind, phase: 'open', options: list.options, query: list.query, repoPickers: freshPickers() });
+  }
+  async function closePickerSession(kind, actionId) {
+    const dialog = D.pickerDialog(kind);
+    if (!dialog) {
+      picker = null;
+      emit({ type: 'PICKER_STATE', actionId, kind, phase: 'closed', repoPickers: freshPickers() });
+      return;
+    }
+    D.closePickerDialog(dialog); // one Escape; the site may also ignore it
+    const deadline = Date.now() + PICKER_CLOSE_MS;
+    while (D.pickerDialog(kind)) {
+      if (transaction || !owner) return;
+      if (Date.now() >= deadline)
+        D.fail('PICKER_STILL_OPEN', `Arena’s ${pickerName(kind)} picker did not close. Close it in the Arena tab yourself; nothing else was clicked.`);
+      await sleep(120);
+    }
+    picker = null;
+    emit({ type: 'PICKER_STATE', actionId, kind, phase: 'closed', repoPickers: freshPickers() });
+  }
+  async function handlePicker(message) {
+    if (!owner) return;
+    const kind = message.kind === 'repo' || message.kind === 'branch' ? message.kind : '';
+    const action = ['open', 'pick', 'close'].includes(message.action) ? message.action : '';
+    const actionId = typeof message.actionId === 'string' && /^[\da-f-]{36}$/i.test(message.actionId) ? message.actionId : '';
+    if (!kind || !action || !actionId)
+      return pickerError('', '', 'INVALID_PICKER_REQUEST', 'Unrecognized repo/branch picker request. Nothing was clicked.');
+    if (transaction)
+      return pickerError(actionId, kind, 'PICKER_BUSY', 'This tab is already tracking a request. Wait for it to finish before using Arena’s repo or branch picker.');
+    try {
+      // Only one picker at a time: the other kind still being open is an in-progress user choice.
+      const other = kind === 'repo' ? 'branch' : 'repo';
+      if (D.pickerDialog(other))
+        D.fail('PICKER_BUSY', `Arena’s ${pickerName(other)} picker is still open. Close it before opening the ${pickerName(kind)} picker.`);
+      // The page-wide notice scan runs only while no picker popover is open: an open list is page
+      // content (repository names can read like notice words — “captcha-solver”), never a notice.
+      if (!D.pickersOpen().length) D.checkBlocks();
+      if (action === 'open') await openPicker(kind, actionId);
+      else if (action === 'pick') await pickFromPicker(kind, actionId, message.value);
+      else await closePickerSession(kind, actionId);
+    } catch (error) {
+      pickerError(actionId, kind, error.code || 'PICKER_FAILED',
+        error.message || `The ${pickerName(kind)} picker action failed. Check the Arena tab.`, !!error.pickerClicked);
+    }
   }
   let probingPort = null;
   async function probe(port) {
@@ -605,6 +730,7 @@
         probe(port);
       } else if (message?.type === 'SEND') send(message);
       else if (message?.type === 'ANSWER_QUESTION') answerQuestion(message);
+      else if (message?.type === 'PICKER') handlePicker(message);
       else if (message?.type === 'CHOOSE_RESPONSE') chooseResponse(message);
       else if (message?.type === 'LOAD_HISTORY') loadHistory(message);
       else if (message?.type === 'CANCEL') {

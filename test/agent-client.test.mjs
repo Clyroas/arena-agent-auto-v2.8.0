@@ -75,7 +75,7 @@ test('a successful handshake turns the port into a ready client', async () => {
   assert.equal(client.pageKind, 'direct');
   assert.equal(client.model, 'Max');
   assert.deepEqual(client.models, [{ name: 'Max', org: 'Arena' }]);
-  assert.equal(ADAPTER_VERSION, '2.8.3');
+  assert.equal(ADAPTER_VERSION, '2.9.0');
   assert.ok(HEARTBEAT_MS > 0);
   client.close();
   assert.equal(port.disconnected, true);
@@ -256,4 +256,33 @@ test('synchronous Chrome attach failures are reported after the caller owns the 
   await assert.rejects(client.readiness, /Extension context invalidated/);
   assert.equal(events.length, 1);
   assert.equal(client.closed, true);
+});
+
+// ---- Repo & branch picker state on the client (v2.9.0) -------------------------------------------
+test('picker state from the adapter is normalized onto the client', async () => {
+  const events = [];
+  const { port, client } = await connect(events);
+  port.emit({ type: 'MODEL_INFO', pageKind: 'agent', model: '', models: [],
+    repoPickers: { repo: { present: true, value: 'Clyroas/arena-agent-auto-v2.8.0', disabled: false }, branch: { present: true, value: 'main', disabled: true } } });
+  assert.deepEqual(client.repoPickers, { repo: { present: true, value: 'Clyroas/arena-agent-auto-v2.8.0', disabled: false }, branch: { present: true, value: 'main', disabled: true } });
+  // A malformed frame can only ever become "not present" — never an invented repository.
+  port.emit({ type: 'MODEL_INFO', pageKind: 'agent', model: '', models: [], repoPickers: { repo: { present: true, value: 42 } } });
+  assert.deepEqual(client.repoPickers.repo, { present: true, value: '', disabled: false });
+  port.emit({ type: 'MODEL_INFO', pageKind: 'agent', model: '', models: [], repoPickers: null });
+  assert.equal(client.repoPickers.repo.value, '');
+  client.close();
+});
+
+test('picker requests travel the port only while the connection is ready', async () => {
+  const events = [];
+  const { port, client } = await connect(events);
+  client.picker('11111111-2222-3333-4444-555555555555', 'repo', 'open');
+  client.picker('11111111-2222-3333-4444-555555555556', 'branch', 'pick', 'main');
+  const pickerMessages = port.posted.filter(message => message.type === 'PICKER');
+  assert.deepEqual(pickerMessages, [
+    { type: 'PICKER', actionId: '11111111-2222-3333-4444-555555555555', kind: 'repo', action: 'open' },
+    { type: 'PICKER', actionId: '11111111-2222-3333-4444-555555555556', kind: 'branch', action: 'pick', value: 'main' }
+  ]);
+  client.close();
+  assert.throws(() => client.picker('11111111-2222-3333-4444-555555555557', 'repo', 'close'), /not ready/);
 });

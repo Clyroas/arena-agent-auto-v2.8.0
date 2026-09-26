@@ -2,7 +2,7 @@ import { selectAttachments, releaseTurnAttachments, restoreTurnAttachments } fro
 import { TabAwakeLease } from './tab-awake.js';
 import { setupFloatingGeometry } from './window-geometry.js';
 import { ConversationView } from './conversation-view.js';
-import { AgentClient } from './agent-client.js';
+import { AgentClient, normalizePickers } from './agent-client.js';
 import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl, withTimeout, capabilitySummary } from './core.js';
 import { liveStatus, questionState } from './live-status.js';
 import { recentModels, rememberModel } from './recent-models.js';
@@ -17,6 +17,9 @@ let tab = null, client = null, pending = null, turns = [], state = 'disconnected
 let busy = false, epoch = 0, dialogResolve = null, switching = false;
 let historyRequest = null, historyTimer = null;
 let actionId = 0, requestedModel = '';
+// One repo/branch picker dialog at a time: { actionId, kind, options, phase, error }. The actionId ties
+// panel and tab together, so a frame from a dialog the user already closed can never act as the current one.
+let pickerAction = null;
 const awakeLease = new TabAwakeLease();
 const staged = []; // Staged files live in memory only, until an accepted send or a local reset.
 let shotAccess = false, shotBusy = '', shotProgress = '', shotSignature = ''; // link screenshots (v2.6.0)
@@ -145,11 +148,11 @@ function render() {
   $('connect').disabled = busy || !!tab || !$('tabs').value || !$('confirmed').checked || !$('authorize').checked;
   $('tabs').disabled = busy || !!tab;
   $('confirmed').disabled = busy || !!tab; $('authorize').disabled = busy || !!tab;
-  $('prepare').disabled = busy || switching || !!shotOperation || !!requestedModel || !!drift?.drift || !!client?.silent || state !== 'ready' || !client?.ready || !!pending;
+  $('prepare').disabled = busy || switching || !!shotOperation || !!requestedModel || !!pickerAction || !!drift?.drift || !!client?.silent || state !== 'ready' || !client?.ready || !!pending;
   // While reattaching, the draft stays editable; Send waits for the verified connection.
   $('prompt').disabled = pending ? true : busy || (state !== 'reconnecting' && (state !== 'ready' || !client?.ready));
   const uploadReady = client?.ready && client.uploadKind === 'input';
-  $('attach-files').disabled = busy || !!pending || state !== 'ready' || !uploadReady;
+  $('attach-files').disabled = busy || !!pending || !!pickerAction || state !== 'ready' || !uploadReady;
   $('attach-files').title = uploadReady ? 'Attach images or files from your computer' : 'Staged files can only be sent after the Arena tab exposes its composer file input. Attach them in Arena until then.';
   $('prepare').textContent = staged.length ? `Send to Arena · ${staged.length} file${staged.length > 1 ? 's' : ''}` : 'Send to Arena';
   $('prepare').title = staged.length ? 'Send this message together with the staged files' : '';
@@ -171,7 +174,7 @@ function render() {
   $('pending').dataset.question = String(questionState(pending?.live?.questions) === 'answerable' && pending?.status !== 'error');
   $('tab-name').textContent = tab ? tabLabel(tab) : '';
   $('tab-url').textContent = tab?.url || '';
-  $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.8.3 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}${drift ? ` · ${drift.text}` : ''}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
+  $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.9.0 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}${drift ? ` · ${drift.text}` : ''}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
   $('adapter-state').dataset.drift = String(!!drift?.drift);
   $('progress').textContent = pending?.status === 'error' ? 'Capture stopped. Read the error above and check the Arena tab. No manual reply entry is available.' : pending?.securityHold ? 'Tracking is paused until Arena’s security verification is completed in the Arena tab. It resumes automatically; nothing is resent.' : pending?.phase === 'review' ? 'Closing the task-review panel and waiting for the composer. No feedback is selected.' : questionState(pending?.live?.questions) === 'answerable' ? 'Review the question cards above. Select an answer, then submit it explicitly. Sensitive or unsupported actions stay in Arena.' : pending?.status === 'waiting' ? 'Your message is in Arena. The status above follows its visible activity; the final reply appears separately — no response time limit. Approvals and unsupported controls stay in Arena.' : pending?.phase === 'upload' ? 'Placing your staged files into the Arena composer, then attempting exactly one Send click…' : 'Preparing the Arena composer and attempting exactly one Send click…';
   const found = client?.ready ? client.historyCount || 0 : 0, imported = turns.filter(t => t.imported).length;
@@ -180,6 +183,7 @@ function render() {
   $('load-history').textContent = historyRequest ? 'Loading earlier messages…' : imported ? 'Reload earlier messages' : `Load earlier messages (${found} found)`;
   $('history-import-note').textContent = imported ? `${imported} imported from the Arena page` : 'Read-only · from this Arena chat';
   renderModelChip();
+  renderPickerBar();
   conversation.render(turns, pending, state);
   updateLiveStatus();
   fitPrompt();
@@ -350,6 +354,111 @@ async function switchChat(kind, name = '') {
 // Keep the chip current if the model is changed in Arena's own picker.
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && client?.ready) { try { client.queryModel(); } catch { /* ignore */ } } });
 
+// ---- Arena Agent Mode repo & branch pickers (v2.9.0) -------------------------------------------
+// When Arena's agent is connected to a GitHub repository, its composer shows a repository and a branch
+// picker. The panel mirrors the two buttons; clicking one opens Arena's own picker in the Arena tab,
+// reads its option list, and shows it here. Choosing an option clicks Arena's option exactly once and
+// is confirmed from what its button then shows — the same "drive the page, verify, never guess" rules
+// as every other control. Nothing is requested from GitHub and nothing is sent.
+function renderPickerBar() {
+  const pickers = client?.ready ? client.repoPickers : null;
+  const agent = !!client?.ready && client.pageKind !== 'direct';
+  const bar = $('picker-bar');
+  bar.hidden = !(agent && (pickers?.repo?.present || pickers?.branch?.present));
+  const setChip = kind => {
+    const chip = $(`${kind}-chip`), label = $(`${kind}-chip-label`), entry = pickers?.[kind];
+    chip.disabled = busy || switching || !!pending || !!pickerAction || !entry?.present || !!entry?.disabled;
+    label.textContent = entry?.value || (kind === 'repo' ? 'Repository' : 'Branch');
+    label.title = entry?.value || '';
+    chip.title = !entry?.present ? `Arena is not showing its ${kind === 'repo' ? 'repository' : 'branch'} picker here`
+      : entry?.disabled ? `Arena’s ${kind === 'repo' ? 'repository' : 'branch'} picker is unavailable right now`
+      : pending ? 'Wait for the current reply before switching'
+      : `Choose the ${kind === 'repo' ? 'GitHub repository' : 'branch'} Arena works on — uses Arena’s own picker`;
+  };
+  setChip('repo'); setChip('branch');
+}
+function pickerOptionRow(option, kind, phase) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'model-option'; button.setAttribute('role', 'listitem');
+  const current = client?.repoPickers?.[kind]?.value || '';
+  button.setAttribute('aria-current', String(option.label === current));
+  button.dataset.name = option.label;
+  const name = document.createElement('span'); name.className = 'model-option-name'; name.textContent = option.label;
+  const meta = document.createElement('span'); meta.className = 'model-option-meta'; meta.textContent = option.meta || '';
+  button.append(name, meta);
+  button.disabled = !!option.disabled || phase !== 'open';
+  button.title = option.disabled ? 'Arena lists this option as unavailable right now' : `Switch Arena’s ${kind === 'repo' ? 'repository' : 'branch'} to ${option.label}`;
+  button.addEventListener('click', () => pickFromDialog(option.label));
+  return button;
+}
+function renderPickerDialog() {
+  if (!pickerAction || !$('picker-dialog').open) return;
+  const { kind, options, phase, error } = pickerAction;
+  const status = $('picker-status');
+  status.dataset.kind = error ? 'error' : 'info';
+  status.textContent = error || (phase === 'opening' ? 'Opening Arena’s picker in the Arena tab…' : phase === 'picking' ? `Asking Arena to switch ${kind === 'repo' ? 'repository' : 'branch'}…` : options.length ? '' : 'Arena’s picker is open, but no options were found.');
+  const query = $('picker-search').value.trim().toLowerCase();
+  const shown = options.filter(option => !query || option.label.toLowerCase().includes(query) || (option.meta || '').toLowerCase().includes(query));
+  $('picker-list').replaceChildren(...shown.map(option => pickerOptionRow(option, kind, phase)));
+  if (!shown.length && options.length) { const empty = document.createElement('p'); empty.className = 'model-empty'; empty.textContent = 'No option matches that search.'; $('picker-list').append(empty); }
+}
+function openPickerDialog(kind) {
+  const chip = $(`${kind}-chip`);
+  if (chip.disabled || $('picker-dialog').open || !client?.ready) return;
+  pickerAction = { actionId: crypto.randomUUID(), kind, options: [], phase: 'opening', error: '' };
+  try { client.picker(pickerAction.actionId, kind, 'open'); }
+  catch (error) { pickerAction = null; notice(error.message || 'The picker could not be opened. Check the Arena tab.'); render(); return; }
+  $('picker-dialog-title').textContent = kind === 'repo' ? 'Repository' : 'Branch';
+  $('picker-search').value = '';
+  try { $('picker-dialog').showModal(); } catch { /* already closing */ }
+  renderPickerDialog();
+  render();
+}
+function pickFromDialog(value) {
+  if (!pickerAction || pickerAction.phase !== 'open' || !client?.ready) return;
+  pickerAction.phase = 'picking'; pickerAction.error = '';
+  try { client.picker(pickerAction.actionId, pickerAction.kind, 'pick', value); }
+  catch (error) { pickerAction.phase = 'open'; pickerAction.error = error.message || 'The choice could not be sent. Check the Arena tab.'; notice(pickerAction.error); }
+  renderPickerDialog();
+}
+// Closing the panel dialog (Done, Escape, backdrop, or a finished pick) also dismisses Arena's own
+// picker in the tab. One close request, best effort; the tab reports if Arena kept it open.
+function endPickerDialog() {
+  const action = pickerAction;
+  if (!action) return;
+  pickerAction = null;
+  try { client?.picker(action.actionId, action.kind, 'close'); } catch { /* the connection reports its own state */ }
+  render();
+}
+function receivePicker(event) {
+  if (!pickerAction || event.actionId !== pickerAction.actionId) return; // a frame from a dialog already closed
+  if (event.type === 'PICKER_ERROR') {
+    pickerAction.error = `${event.code}: ${event.message}`;
+    if (pickerAction.phase === 'picking') pickerAction.phase = 'open'; // the option list is still valid
+    if (event.repoPickers && client) client.repoPickers = normalizePickers(event.repoPickers);
+    notice(pickerAction.error);
+    renderPickerDialog(); return;
+  }
+  if (event.repoPickers && client) client.repoPickers = normalizePickers(event.repoPickers);
+  if (event.phase === 'open') {
+    pickerAction.options = Array.isArray(event.options) ? event.options.slice(0, 200) : [];
+    pickerAction.phase = 'open'; pickerAction.error = '';
+    renderPickerDialog();
+  } else if (event.phase === 'done') {
+    pickerAction = null;
+    try { $('picker-dialog').close(); } catch { /* already closed */ }
+    notice(`Arena switched its ${event.kind === 'repo' ? 'repository' : 'branch'} to ${event.value || 'your choice'}. Nothing was sent.`);
+  } else if (event.phase === 'closed') {
+    pickerAction = null;
+    try { $('picker-dialog').close(); } catch { /* already closed */ }
+  }
+}
+$('repo-chip').addEventListener('click', () => openPickerDialog('repo'));
+$('branch-chip').addEventListener('click', () => openPickerDialog('branch'));
+$('picker-close').addEventListener('click', () => $('picker-dialog').close());
+$('picker-dialog').addEventListener('close', endPickerDialog);
+$('picker-search').addEventListener('input', renderPickerDialog);
+
 async function refresh() {
   const selected = $('tabs').value, tabs = await rpc('LIST_TABS');
   $('tabs').replaceChildren();
@@ -478,6 +587,7 @@ function giveUp(message, turnText) {
 }
 function connectionLost(event) {
   clearHistoryRequest();
+  pickerAction = null; try { $('picker-dialog').close(); } catch { /* already closed */ }
   const old = client; client = null; old?.close();
   if (!tab || !event.wasReady) {
     state = 'error'; if (pending) { pending.status = 'error'; releaseTurnAttachments(pending); };
@@ -559,6 +669,7 @@ function handleEvent(event) {
     render(); return;
   }
   if (event.type === 'MODEL_INFO') { render(); if ($('model-dialog').open) renderModelList(); return; }
+  if (event.type === 'PICKER_STATE' || event.type === 'PICKER_ERROR') { receivePicker(event); render(); return; }
   if (event.type === 'BRIDGE_LOST') { connectionLost(event); render(); return; }
   if (event.type === 'WAITING') { notice(`${event.code}: ${event.message}`); render(); return; }
   if (event.type === 'ERROR' && !event.requestId) {

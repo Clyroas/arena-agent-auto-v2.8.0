@@ -1,10 +1,26 @@
-# Improvement implementation status — 2.8.3
+# Improvement implementation status — 2.9.0
 
-Updated 2026-09-25. Tracks the first implementation batch from [IMPROVEMENT-REVIEW.md](IMPROVEMENT-REVIEW.md).
+Updated 2026-09-26. Tracks the first implementation batch from [IMPROVEMENT-REVIEW.md](IMPROVEMENT-REVIEW.md).
 
 This is a correctness/recovery release, **not completion of the entire roadmap and not a measured 5× performance claim**. The original review remains an audit of 2.8.1; its line references describe that baseline.
 
-## Implemented
+## 2.9.0 addition — Agent Mode repository & branch pickers
+
+Mirrors Arena's own repo/branch picker buttons (the supplied trigger markup) in the panel composer, driving Arena's page — no GitHub API.
+
+| Area | Changes | Verification |
+|---|---|---|
+| Trigger recognition | Exact icon-path signatures (book / git-branch) + Radix trigger shape (`aria-haspopup="dialog"`, `aria-controls`, single `span.truncate`); excludes transcript, dialogs, nav; per-kind duplicate detection refuses ambiguity. | Real `agent-dom.js` under jsdom against the supplied markup, with decoy, dialog-scoped, hidden and duplicate triggers. |
+| State reporting | Non-throwing `repoInfo()` on `READY`/`MODEL_INFO` (presence, value, disabled), normalized by the pure `normalizePickers()` so a malformed frame can only become "not present". | Client tests with well-formed and malformed frames. |
+| Open | One trigger click (or adoption of an already-open popover), bounded 5 s wait, options read from `role="option"` rows (fallback: buttons in a `role="listbox"`), else coded `PICKER_UNRECOGNIZED` with the popover left to the user. | Content-script suite on a wired jsdom Arena page: one click, list reported, `PICKER_NOT_OPENED` when the popover never mounts. |
+| Pick | One exact-match click; `PICKER_NOT_FOUND` / `PICKER_AMBIGUOUS` / `PICKER_OPTION_DISABLED` refuse without clicking; confirmation only when the popover closed **and** the trigger label shows the choice; `PICK_NOT_CONFIRMED` otherwise — never re-clicked. | Adapter and content suites (valid, unknown, duplicate, disabled, stale action id). |
+| Close & cleanup | One Escape on the recognized popover, bounded 3 s verification; disconnect cleanup closes a popover the panel left open, once, best effort. | Content suites including the disconnect path. |
+| Isolation | `PICKER_BUSY` while a turn is tracked; `PICKER_OPEN` refuses Send while a picker is open; one action id per dialog; panel blocks Send/attach while a picker session is live. | Content (`WATCH` in flight, `SEND` during open picker) and panel lifecycle tests. |
+| Panel UI | Two chips in the composer (site icons, current values, disabled states), a dialog listing Arena's options with local filtering, status/error line, confirmation notice; hidden on Direct pages and pages without pickers. | Real-panel markup tests (chips, list, filter, pick, done, stale frames, Send blocking). |
+
+Boundary: Arena's picker popover behaviour (portal, Escape handling, list rendering) is modelled from the supplied trigger markup and standard Radix/shadcn patterns; it has **not** been exercised against a live signed-in Arena session. Recognition is intentionally exact — an Arena redesign that changes the icons reports the pickers as absent rather than guessing.
+
+## Implemented (2.8.3 batch)
 
 | Review area | Changes | Verification |
 |---|---|---|

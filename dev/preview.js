@@ -37,7 +37,8 @@ const port = {
     if (message.type === 'SEND') { sent.push(message); run = { requestId: message.requestId }; }
     if (message.type === 'PROBE') emitReady();
     if (message.type === 'PING') emit({ type: 'PONG' });
-    if (message.type === 'MODEL') emit({ type: 'MODEL_INFO', url: URL_AGENT, pageKind: 'agent', model: '', models: [] });
+    if (message.type === 'MODEL') emit({ type: 'MODEL_INFO', url: URL_AGENT, pageKind: 'agent', model: '', models: [], repoPickers: pickerState() });
+    if (message.type === 'PICKER') handlePickerDemo(message);
     if (message.type === 'ANSWER_QUESTION') run?.answer?.(message);
     if (message.type === 'CHOOSE_RESPONSE') run?.choose?.(message);
     if (message.type === 'LOAD_HISTORY') emitHistory(message.requestId);
@@ -45,10 +46,41 @@ const port = {
   },
   disconnect() {}
 };
-function emit(event) { portHandler?.({ documentId: 'dev-document', adapterVersion: '2.8.2', ...event }); }
+function emit(event) { portHandler?.({ documentId: 'dev-document', adapterVersion: '2.9.0', ...event }); }
+
+// ---------- fake repo/branch pickers (v2.9.0) -----------------------------------
+const REPOSITORIES = [
+  { label: 'Clyroas/arena-agent-auto-v2.8.0', meta: 'Updated 2 days ago' },
+  { label: 'Clyroas/arena-auto-chat', meta: 'Updated last week' },
+  { label: 'Clyroas/site-notes', meta: 'Updated 3 months ago' }
+];
+const BRANCHES = repo => (repo === 'Clyroas/site-notes'
+  ? [{ label: 'main', meta: 'default' }, { label: 'draft/pages', meta: '' }]
+  : [{ label: 'main', meta: 'default' }, { label: 'arena/picker-bar', meta: '' }, { label: 'fix/security-resume', meta: '' }]);
+const demoRepo = { repo: 'Clyroas/arena-agent-auto-v2.8.0', branch: 'main' };
+const pickerState = () => ({
+  repo: { present: true, value: demoRepo.repo, disabled: false },
+  branch: { present: true, value: demoRepo.branch, disabled: false }
+});
+function handlePickerDemo(message) {
+  const kind = message.kind, actionId = message.actionId;
+  const options = kind === 'repo' ? REPOSITORIES : BRANCHES(demoRepo.repo);
+  if (message.action === 'open') {
+    emit({ type: 'PICKER_STATE', actionId, kind, phase: 'open', options, query: '', repoPickers: pickerState() });
+  } else if (message.action === 'pick') {
+    if (!options.some(option => option.label === message.value)) {
+      emit({ type: 'PICKER_ERROR', actionId, kind, code: 'PICKER_NOT_FOUND', message: 'That option is not in Arena’s current list (it may have been filtered out). Nothing was clicked.', clicked: false, repoPickers: pickerState() });
+      return;
+    }
+    if (kind === 'repo') { demoRepo.repo = message.value; demoRepo.branch = 'main'; } else demoRepo.branch = message.value;
+    setTimeout(() => emit({ type: 'PICKER_STATE', actionId, kind, phase: 'done', value: message.value, repoPickers: pickerState() }), 450);
+  } else if (message.action === 'close') {
+    emit({ type: 'PICKER_STATE', actionId, kind, phase: 'closed', repoPickers: pickerState() });
+  }
+}
 function emitReady() {
   emit({ type: 'READY', url: URL_AGENT, inputKind: 'textarea', reviewPending: false, uploadKind: 'input', fileInputCount: 1, historyCount: 3,
-    pageKind: 'agent', model: '', models: [], blocked: '' });
+    pageKind: 'agent', model: '', models: [], blocked: '', repoPickers: pickerState() });
 }
 // Waits for the SEND the panel just posted (with attachments it is posted after a worker round-trip).
 async function nextSend() {
@@ -259,6 +291,10 @@ const acts = {
   async history() {
     $('load-history').click();
     log('earlier turns imported above this session');
+  },
+  async pickers() {
+    // The chips sit in the composer; opening one emits Arena's own list, picking switches the demo repo.
+    log('repo & branch chips are in the composer — open one and pick an option');
   }
 };
 

@@ -5,6 +5,7 @@ import { JSDOM } from 'jsdom';
 import * as core from '../core.js';
 import * as attachments from '../attachment-state.js';
 import * as screenshots from '../screenshot.js';
+import { normalizePickers } from '../agent-client.js';
 import { liveStatus, questionState } from '../live-status.js';
 import { TabAwakeLease } from '../tab-awake.js';
 
@@ -13,7 +14,7 @@ import { TabAwakeLease } from '../tab-awake.js';
 const source = readFileSync(new URL('../panel.js', import.meta.url), 'utf8').replace(/^import[^\n]*\n/gm, '');
 const html = readFileSync(new URL('../panel.html', import.meta.url), 'utf8');
 const tick = () => new Promise(resolve => { setImmediate(resolve); });
-async function open({ captureLink = async () => {}, send = async () => {} } = {}) {
+async function open({ captureLink = async () => {}, send = async () => {}, picker = () => {}, repoPickers = null, pageKind = 'agent' } = {}) {
   const dom = new JSDOM(html, { url: 'https://extension.test/panel.html', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window, deadlines = [];
   const listener = { addListener() {}, removeListener() {} };
@@ -24,7 +25,7 @@ async function open({ captureLink = async () => {}, send = async () => {} } = {}
   };
   const originalTimeout = w.setTimeout.bind(w);
   w.setTimeout = (fn, ms) => { if (ms === 15000) { deadlines.push(fn); return 0; } return originalTimeout(fn, ms); };
-  Object.assign(w, core, attachments, screenshots, {
+  Object.assign(w, core, attachments, screenshots, { normalizePickers,
     hasShotAccess: () => screenshots.hasShotAccess(w.chrome), requestShotAccess: async () => true, removeShotAccess: async () => true,
     captureLink, liveStatus, questionState, setupFloatingGeometry() {}, recentModels: () => [], rememberModel() {},
     ArenaAgentAttachments: globalThis.ArenaAgentAttachments,
@@ -36,7 +37,7 @@ async function open({ captureLink = async () => {}, send = async () => {} } = {}
     }
   });
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  w.HTMLDialogElement.prototype.close = function () { this.open = false; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
   w.URL.createObjectURL = () => 'blob:test'; w.URL.revokeObjectURL = () => {};
   w.eval(`${source}\nwindow.testPanel = {
     stageFiles, clear, screenshotLink, cancelScreenshot, handleEvent, render,
@@ -44,10 +45,11 @@ async function open({ captureLink = async () => {}, send = async () => {} } = {}
     setCapabilities(capabilities) { client.capabilities = capabilities; render(); },
     setModel(expected, actual) { requestedModel = expected; client.model = actual; render(); },
     setTurn(turn) { turns.push(turn); pending = turn; state = 'waiting'; },
-    get current() { return { staged, pending, turns, state, shotOperation, historyRequest }; }
+    get current() { return { staged, pending, turns, state, shotOperation, historyRequest }; },
+    get pickerSession() { return pickerAction; }
   };`);
   await tick();
-  const connection = { ready: true, uploadKind: 'input', pageKind: 'agent', send, close() { this.ready = false; }, loadHistory() {} };
+  const connection = { ready: true, uploadKind: 'input', pageKind, send, close() { this.ready = false; }, loadHistory() {}, picker, ...(repoPickers ? { repoPickers } : {}) };
   w.testPanel.setup(connection);
   return { w, ui: w.testPanel, deadlines, close() { w.testPanel.clear(); w.close(); } };
 }
@@ -235,5 +237,114 @@ test('a page that no longer exposes the composer blocks Send and names the gap',
     page.ui.setCapabilities({ pageKind: 'agent', mode: '', checks: { composer: true, send: true, transcript: true, questions: true, responsePairs: true, reviewPanel: false, upload: true, uploadPicker: true } });
     assert.equal(button.disabled, false);
     assert.equal(page.w.document.getElementById('adapter-state').dataset.drift, 'false');
+  } finally { page.close(); }
+});
+
+// ---- Arena Agent Mode repo & branch pickers (v2.9.0) ---------------------------------------------
+const PICKERS = { repo: { present: true, value: 'Clyroas/arena-agent-auto-v2.8.0', disabled: false }, branch: { present: true, value: 'main', disabled: false } };
+
+test('the repo and branch chips mirror Arena’s picker state and hide when it has none', async () => {
+  const plain = await open();
+  try {
+    assert.equal(plain.w.document.getElementById('picker-bar').hidden, true);
+  } finally { plain.close(); }
+  const page = await open({ repoPickers: PICKERS });
+  try {
+    const bar = page.w.document.getElementById('picker-bar');
+    assert.equal(bar.hidden, false);
+    assert.equal(page.w.document.getElementById('repo-chip-label').textContent, 'Clyroas/arena-agent-auto-v2.8.0');
+    assert.equal(page.w.document.getElementById('branch-chip-label').textContent, 'main');
+    assert.equal(page.w.document.getElementById('repo-chip').disabled, false);
+    // A Direct chat never shows Arena's repository pickers.
+    const direct = await open({ repoPickers: PICKERS, pageKind: 'direct' });
+    try { assert.equal(direct.w.document.getElementById('picker-bar').hidden, true); }
+    finally { direct.close(); }
+  } finally { page.close(); }
+});
+
+test('opening a chip asks the tab to open Arena’s picker and lists what it sends back', async () => {
+  const calls = [];
+  const page = await open({ repoPickers: PICKERS, picker: (...args) => calls.push(args) });
+  try {
+    page.w.document.getElementById('repo-chip').click();
+    const dialog = page.w.document.getElementById('picker-dialog');
+    assert.equal(dialog.open, true);
+    assert.deepEqual(calls[0].slice(0, 3), [calls[0][0], 'repo', 'open']);
+    assert.match(page.w.document.getElementById('picker-status').textContent, /Opening Arena’s picker/);
+    assert.equal(page.w.document.getElementById('prepare').disabled, true, 'Send waits while the picker is in use');
+    page.ui.handleEvent({ type: 'PICKER_STATE', actionId: calls[0][0], kind: 'repo', phase: 'open',
+      options: [{ label: 'Clyroas/arena-agent-auto-v2.8.0', meta: 'Updated 2 days ago', disabled: false }, { label: 'Clyroas/other-repo', meta: '', disabled: false }], query: '' });
+    const rows = [...page.w.document.querySelectorAll('#picker-list .model-option')];
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].getAttribute('aria-current'), 'true');
+    assert.equal(rows[0].disabled, false);
+    // Typing filters the list that Arena itself sent; nothing is sent back to the tab.
+    const search = page.w.document.getElementById('picker-search');
+    search.value = 'other';
+    search.dispatchEvent(new page.w.Event('input'));
+    assert.equal(page.w.document.querySelectorAll('#picker-list .model-option').length, 1);
+    assert.equal(calls.length, 1);
+  } finally { page.close(); }
+});
+
+test('choosing an option picks through Arena once, then the dialog closes and the chip updates', async () => {
+  const calls = [];
+  const page = await open({ repoPickers: PICKERS, picker: (...args) => calls.push(args) });
+  try {
+    page.w.document.getElementById('repo-chip').click();
+    const actionId = calls[0][0];
+    page.ui.handleEvent({ type: 'PICKER_STATE', actionId, kind: 'repo', phase: 'open',
+      options: [{ label: 'Clyroas/arena-agent-auto-v2.8.0', meta: '', disabled: false }, { label: 'Clyroas/other-repo', meta: '', disabled: false }], query: '' });
+    page.w.document.querySelector('#picker-list .model-option[data-name="Clyroas/other-repo"]').click();
+    assert.deepEqual(calls[1].slice(1), ['repo', 'pick', 'Clyroas/other-repo']);
+    assert.match(page.w.document.getElementById('picker-status').textContent, /Asking Arena to switch/);
+    page.ui.handleEvent({ type: 'PICKER_STATE', actionId, kind: 'repo', phase: 'done', value: 'Clyroas/other-repo',
+      repoPickers: { repo: { present: true, value: 'Clyroas/other-repo', disabled: false }, branch: { present: true, value: 'main', disabled: false } } });
+    assert.equal(page.w.document.getElementById('picker-dialog').open, false);
+    assert.equal(page.w.document.getElementById('repo-chip-label').textContent, 'Clyroas/other-repo');
+    assert.equal(page.w.document.getElementById('prepare').disabled, false);
+    assert.match(page.w.document.getElementById('notice-text').textContent, /switched its repository to Clyroas\/other-repo/);
+    // The finished dialog does not send another close: Arena’s picker already closed itself.
+    assert.equal(calls.length, 2);
+  } finally { page.close(); }
+});
+
+test('a picker error stays visible in the dialog and never closes it behind the user’s back', async () => {
+  const calls = [];
+  const page = await open({ repoPickers: PICKERS, picker: (...args) => calls.push(args) });
+  try {
+    page.w.document.getElementById('branch-chip').click();
+    const actionId = calls[0][0];
+    page.w.document.getElementById('picker-dialog-title').textContent = 'Branch';
+    page.ui.handleEvent({ type: 'PICKER_STATE', actionId, kind: 'branch', phase: 'open',
+      options: [{ label: 'main', meta: '', disabled: false }], query: '' });
+    page.w.document.querySelector('#picker-list .model-option').click();
+    page.ui.handleEvent({ type: 'PICKER_ERROR', actionId, kind: 'branch', code: 'PICK_NOT_CONFIRMED', message: 'Arena did not confirm the change.' });
+    assert.equal(page.w.document.getElementById('picker-dialog').open, true);
+    assert.match(page.w.document.getElementById('picker-status').textContent, /PICK_NOT_CONFIRMED/);
+    assert.equal(page.w.document.getElementById('picker-status').dataset.kind, 'error');
+    // A stale frame from an older dialog is ignored entirely.
+    page.ui.handleEvent({ type: 'PICKER_STATE', actionId: '00000000-0000-0000-0000-000000000000', kind: 'branch', phase: 'done', value: 'nope' });
+    assert.equal(page.w.document.getElementById('picker-dialog').open, true);
+    // Done dismisses Arena’s own picker through the tab.
+    page.w.document.getElementById('picker-close').click();
+    assert.equal(page.w.document.getElementById('picker-dialog').open, false);
+    assert.deepEqual(calls.at(-1).slice(1, 3), ['branch', 'close']);
+    assert.equal(page.ui.pickerSession, null);
+  } finally { page.close(); }
+});
+
+test('an unavailable option is shown disabled and cannot be picked', async () => {
+  const calls = [];
+  const page = await open({ repoPickers: PICKERS, picker: (...args) => calls.push(args) });
+  try {
+    page.w.document.getElementById('repo-chip').click();
+    const actionId = calls[0][0];
+    page.ui.handleEvent({ type: 'PICKER_STATE', actionId, kind: 'repo', phase: 'open',
+      options: [{ label: 'Clyroas/arena-agent-auto-v2.8.0', meta: '', disabled: false }, { label: 'Clyroas/archived-repo', meta: 'archived', disabled: true }], query: '' });
+    const rows = [...page.w.document.querySelectorAll('#picker-list .model-option')];
+    assert.equal(rows[1].disabled, true);
+    rows[1].click();
+    assert.equal(calls.length, 1, 'a disabled option never reaches the tab');
   } finally { page.close(); }
 });

@@ -4,7 +4,7 @@
 // idle worker can no longer drop the chat connection.
 import { withTimeout } from './core.js';
 
-export const ADAPTER_VERSION = '2.8.3';
+export const ADAPTER_VERSION = '2.9.0';
 export const HEARTBEAT_MS = 10000;
 // Worker requests made while a Send is being prepared must not wait forever: the panel would otherwise
 // stay in “Sending…” with the staged bytes held in memory. Both are bounded well below the point where a
@@ -14,6 +14,19 @@ export const GRANT_TIMEOUT_MS = 10000;
 export const HANDSHAKE_TIMEOUT_MS = 15000;
 export const DIALOG_TIMEOUT_MS = 120000;
 export const SILENT_PORT_MS = 90000;
+
+// Arena's Agent Mode repo/branch picker state as reported by the adapter (agent-dom.js repoInfo).
+// Pure so the client, the panel's event path and the tests share one shape: a missing or malformed
+// entry can only ever become "not present", never an invented repository name.
+export function normalizePickers(reported) {
+  const shape = entry => entry && typeof entry === 'object'
+    ? { present: !!entry.present,
+        value: typeof entry.value === 'string' ? entry.value.slice(0, 120) : '',
+        disabled: !!entry.disabled }
+    : { present: false, value: '', disabled: false };
+  if (!reported || typeof reported !== 'object') return { repo: shape(null), branch: shape(null) };
+  return { repo: shape(reported.repo), branch: shape(reported.branch) };
+}
 
 export class AgentClient {
   // `timeouts` exists so tests can exercise the failed-worker paths without waiting out the real ones;
@@ -108,6 +121,15 @@ export class AgentClient {
     // case the panel simply reports that no capability check was sent rather than inventing one.
     if (event.capabilities && typeof event.capabilities === 'object') this.capabilities = event.capabilities;
     if (Array.isArray(event.models) && (event.models.length || !this.models?.length)) this.models = event.models.slice(0, 400);
+    // Arena's Agent Mode repository/branch picker state: presence, the current value on its button, and
+    // whether Arena currently allows opening it. Normalized so a malformed frame can never invent a repo.
+    if (event.repoPickers && typeof event.repoPickers === 'object') this.repoPickers = normalizePickers(event.repoPickers);
+  }
+  // Repo & branch picker requests (see agent-content.js PICKER): one actionId per dialog the panel
+  // opens — open reads Arena's own list, pick clicks exactly one of its options, close dismisses it.
+  picker(actionId, kind, action, value) {
+    if (this.closed || !this.ready) throw new Error('The Arena connection is not ready.');
+    this.post({ type: 'PICKER', actionId, kind, action, ...(typeof value === 'string' && value ? { value } : {}) });
   }
   queryModel() { this.post({ type: 'MODEL' }); }
   // Unexpected loss (tab reloaded/discarded, page closed). The panel decides whether to reattach.

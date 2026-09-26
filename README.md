@@ -6,9 +6,9 @@ and captures the matching reply from the transcript. There is no manual fallback
 API client: if the page can't be driven reliably, the extension fails closed with an explanation
 instead of guessing.
 
-Version 2.8.3 · no build step · no runtime dependencies.
+Version 2.9.0 · no build step · no runtime dependencies.
 
-See [CHANGELOG.md](CHANGELOG.md) for 2.8.3 and [implementation status](docs/IMPLEMENTATION-STATUS.md) for completed work, verification limits, and remaining improvements. Reload both the extension and your Arena tabs after updating.
+See [CHANGELOG.md](CHANGELOG.md) for 2.9.0 and [implementation status](docs/IMPLEMENTATION-STATUS.md) for completed work, verification limits, and remaining improvements. Reload both the extension and your Arena tabs after updating.
 
 ## What it does
 
@@ -20,6 +20,10 @@ See [CHANGELOG.md](CHANGELOG.md) for 2.8.3 and [implementation status](docs/IMPL
   then reconnects and automatically restores your previous live window and tab once ready.
   No manual tab click is needed to start loading; nothing is sent. Sign-in and Arena
   dialogs still require your input.
+- **Repo & branch pickers (Agent Mode)** — when Arena's agent is connected to a GitHub repository, its
+  repository and branch selectors appear beside the panel's composer, mirroring the ones on the site.
+  Opening one opens Arena's own picker and lists its options here; choosing one clicks Arena's option
+  exactly once and is confirmed from what its button then shows. No GitHub API, nothing extra is sent.
 - **Recovery without resending** — reconnecting to the same conversation keeps your local draft and history. Verified accepted messages can be tracked again read-only. Connection setup can be cancelled, and a nonresponsive tab pauses new sends without interrupting generation.
 - **Live activity view** — while Arena works, the panel shows the in-progress text (with a caret
   while genuinely still streaming), tool steps as they start, clarification cards you can answer,

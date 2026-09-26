@@ -1,6 +1,6 @@
 # Architecture
 
-How Arena Auto Chat 2.8.2 is put together: the three Chrome contexts, the wire between them, and
+How Arena Auto Chat 2.9.0 is put together: the three Chrome contexts, the wire between them, and
 the paths a message, a file and a screenshot take. Companion to [STABILITY-REVIEW.md](../STABILITY-REVIEW.md),
 which documents why the guarantees below exist.
 
@@ -30,7 +30,8 @@ files by `test/version-sync.test.mjs`). The panel refuses an adapter that report
 different version, and the worker refuses a page whose injected script did not register.
 
 Panel ⇄ content script port messages include `PROBE`, `READY`, `PING`/`PONG`, `MODEL`/`MODEL_INFO`,
-`SEND`, `CANCEL`/`CANCELLED`, `ANSWER_QUESTION`, `CHOOSE_RESPONSE`, `LOAD_HISTORY`, and streamed
+`SEND`, `CANCEL`/`CANCELLED`, `ANSWER_QUESTION`, `CHOOSE_RESPONSE`, `LOAD_HISTORY`, `PICKER`
+(repo/branch picker `open`/`pick`/`close`, answered by `PICKER_STATE`/`PICKER_ERROR`), and streamed
 event frames. The port itself provides liveness (it closes with the panel or the page); a heartbeat
 every 10 s keeps state flowing, and a 5-minute lease in the content script guards against a silent
 panel — sized to survive Chrome's once-a-minute timer throttling. The panel separately reports 90 seconds without inbound frames as a nonresponsive tab and pauses new sends; it does not terminate generation or resend.
@@ -83,6 +84,29 @@ Chrome's ~2 captures/second quota is handled with up to 4 rate-limit retries at 
 genuine failure surfaces as a clean, coded error. Requires the optional `<all_urls>` host
 permission, requested on first use and revocable in Settings. Nothing is stored.
 
+## Repo & branch pickers
+
+Arena's Agent Mode can work on a GitHub repository; its composer then shows a repository and a branch
+picker (Radix popovers). Since 2.9.0 the panel mirrors both. `agent-dom.js` recognises the triggers by
+their exact icon geometry plus the trigger shape (`aria-haspopup="dialog"`, `aria-controls`, one
+truncated label), reports them read-only through `READY`/`MODEL_INFO` as `repoPickers`, and exposes the
+drive primitives. Every panel action goes through Arena's own controls on the tab's direct port:
+
+- **open** — one click on the trigger (or adoption of an already-open popover, since a second click would
+  toggle it closed), then the option rows are read from the popover its `aria-controls` names. Only
+  `role="option"` rows, or buttons inside a `role="listbox"`, are accepted; anything else is a coded
+  `PICKER_UNRECOGNIZED` and the popover is left for the user.
+- **pick** — one exact-match click on one option row; unknown, duplicate or disabled options are refused
+  with nothing clicked. Confirmation is read back from the page: the popover closed **and** the trigger's
+  label now shows the chosen value. Anything else is `PICK_NOT_CONFIRMED` — never re-clicked.
+- **close** — one Escape keydown on the recognized popover, then verification that it closed.
+
+One action id per dialog ties the panel and the tab together, so a frame from a closed dialog can never
+act as the current one. A Send while a picker is open fails closed (`PICKER_OPEN`), picker actions while
+a turn is tracked fail closed (`PICKER_BUSY`), and a lost panel connection closes a popover it left open
+with one best-effort Escape. There is no GitHub API, no extra permission and no storage: repo and branch
+names are read from the page the user already trusts, capped at 120 characters, and never persisted.
+
 ## State and storage
 
 | Data | Where | Notes |
@@ -102,9 +126,9 @@ Extension pages declare `connect-src 'none'`: the extension itself makes no netw
 | Module | Exports / role |
 |--------|----------------|
 | `core.js` | `AGENT_URL`, `DIRECT_URL`, `isArena`/`isDirect`/`isDirectChat`, `directModelUrl`, `samePage`, `tabLabel`, `withTimeout`, `capabilitySummary` |
-| `agent-dom.js` | `globalThis.ArenaAgentDOM`: selectors, transcript reading, typing, clicking, coded `DomError`s, and `capabilities()` — a non-throwing semantic snapshot of which named controls the page currently exposes |
+| `agent-dom.js` | `globalThis.ArenaAgentDOM`: selectors, transcript reading, typing, clicking, coded `DomError`s, `capabilities()` — a non-throwing semantic snapshot of which named controls the page currently exposes — and the repo/branch picker primitives (`pickerTriggers`, `repoInfo`, `pickerDialog`, `readPickerOptions`, `pickPickerOption`, `closePickerDialog`) |
 | `agent-content.js` | Connection ownership, heartbeat lease, scan coalescing, registration guard |
-| `agent-client.js` | `AgentClient`: the panel's direct port, heartbeat, bounded worker calls |
+| `agent-client.js` | `AgentClient`: the panel's direct port, heartbeat, bounded worker calls, normalized `repoPickers` state |
 | `conversation-view.js` | Transcript rendering against the real `panel.html` markup contract |
 | `live-view.js` / `rich-view.js` / `live-status.js` | Live activity, rich (Markdown/code) rendering, status derivation |
 | `panel.js` | Panel bootstrap: tabs, state machine, notices, dialogs, settings |
