@@ -142,7 +142,7 @@ test('watch forwards remembered question rows so a resume keeps tracking', async
   const client = new AgentClient(42, () => {}, 'https://arena.ai/agent');
   try {
     for (let i = 0; i < 200 && !posted.some(m => m.type === 'PROBE'); i++) await new Promise(resolve => { setImmediate(resolve); });
-    listeners.message.forEach(fn => fn({ type: 'READY', adapterVersion: '2.8.3', pageKind: 'agent' }));
+    listeners.message.forEach(fn => fn({ type: 'READY', adapterVersion: '2.9.0', pageKind: 'agent' }));
     await client.readiness;
     client.watch('11111111-1111-1111-1111-111111111111', 'hello', 'user-1', 'https://arena.ai/agent', false, ['assistant-1']);
     const watch = posted.find(m => m.type === 'WATCH');

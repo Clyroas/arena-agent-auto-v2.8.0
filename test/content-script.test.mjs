@@ -37,7 +37,7 @@ function open() {
   const counters = { matchTurn: 0, checkBlocks: 0 };
   class DomError extends Error { constructor(code, message) { super(message); this.code = code; } }
   window.ArenaAgentDOM = {
-    version: '2.8.3', counters, DomError,
+    version: '2.9.0', counters, DomError,
     samePage: () => true,
     checkBlocks: () => { counters.checkBlocks++; },
     securityNotice: () => '',
@@ -65,7 +65,7 @@ test('the content script registers once and reports its version to the panel', (
   const page = open();
   try {
     assert.equal(page.connectListeners.length, 1);
-    assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.version, '2.8.3');
+    assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.version, '2.9.0');
     assert.equal(page.window.__ARENA_AGENT_REGISTRATION__.isAlive(), true);
     page.window.eval(source); // a second injection of the same version must not stack listeners
     assert.equal(page.connectListeners.length, 1);
