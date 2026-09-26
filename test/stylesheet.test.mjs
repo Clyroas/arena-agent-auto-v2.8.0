@@ -117,7 +117,7 @@ test('the new motion layer is bound to state that changes once per event', () =>
   // not replay (that is fine), but one keyed off a class the render loop rewrites would twitch. Each rule
   // in the motion section must therefore hang off state (hidden/aria/data/class) or an element that is
   // created once per event - never off a bare element that is re-rendered in place.
-  const CREATED_ONCE = new Set(['.arrive', '.chat-empty > *', '.chat-empty .empty-orb', '.live-output', '.question-card', '.assistant-message',
+  const CREATED_ONCE = new Set(['.arrive', '.chat-empty > *', '.live-output', '.question-card', '.assistant-message',
     '.assistant-mark', '.attachment-chip', '.history-import']);
   // Classes the panel adds for exactly one event and never rewrites in place.
   const STATE_CLASSES = /(?:^|\.)(?:tool-new|streaming|fresh)(?:[.:\s]|$)/;
@@ -142,4 +142,20 @@ test('every icon the stylesheet references exists', () => {
   const referenced = new Set([...raw.matchAll(/url\(["']?(icons\/[^"')]+)["']?\)/g)].map(match => match[1]));
   assert.ok(referenced.size >= 4, 'the panel uses its packaged UI icons');
   for (const file of referenced) assert.doesNotThrow(() => readFileSync(new URL(`../${file}`, import.meta.url)), `${file} is referenced by panel.css but missing`);
+});
+
+test('mode and minimized notices stay in the measured dock, not over the transcript', () => {
+  // These used to be position:absolute above the composer. ResizeObserver measures the dock's border
+  // box, so a floating chip was invisible to it and covered the last reply and the jump control.
+  const blocks = selector => [...css.matchAll(new RegExp(selector + '\\s*\\{([^}]+)\\}', 'g'))].map(match => match[1]);
+  assert.ok(blocks('\\.model-chip').some(body => /position:\s*static/.test(body)), 'the mode chip must be in flow');
+  assert.ok(blocks('\\.notice-dot').some(body => /position:\s*static/.test(body)), 'the minimized notice must be in flow');
+  assert.equal(blocks('\\.model-chip').some(body => /position:\s*absolute/.test(body)), false);
+  assert.equal(blocks('\\.notice-dot').some(body => /position:\s*absolute/.test(body)), false);
+  assert.match(css, /\.dock-meta:not\(:has\(button:not\(\[hidden\]\)\)\)/, 'an empty dock row must collapse so it does not reserve a gap');
+});
+
+test('working chrome does not spin a rainbow over the text the user is reading', () => {
+  assert.doesNotMatch(css, /glow-spin/, 'the spinning rainbow was the unstable part of the working state');
+  assert.doesNotMatch(css, /conic-gradient/, 'accent and status colours come from tokens, not a second palette');
 });

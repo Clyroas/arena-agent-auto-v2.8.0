@@ -75,3 +75,30 @@ test('the status regions that announce changes keep their live behaviour', () =>
   assert.match(html, /aria-live="polite"/, 'the polite live regions must stay');
   assert.match(html, /id="chat-scroll"[^>]*tabindex="0"/, 'the transcript must stay keyboard-scrollable');
 });
+
+test('the conversation is the first surface, and overlays that cover it are in the measured dock', () => {
+  assert.notEqual(document.body.dataset.sheet, 'open', 'the sheet must not cover the chat on first paint');
+  assert.equal(document.body.dataset.connected, 'false', 'the empty-state connect action has to be visible before script runs');
+  const sheet = document.getElementById('settings-sheet');
+  assert.equal(sheet.dataset.open, 'false');
+  assert.equal(sheet.hasAttribute('inert'), true, 'a closed sheet must not be in the tab order');
+  assert.equal(document.getElementById('settings-button').getAttribute('aria-expanded'), 'false');
+  assert.equal(document.getElementById('status-pill').getAttribute('aria-expanded'), 'false');
+  const skip = document.querySelector('a.skip-link');
+  assert.equal(skip?.getAttribute('href'), '#chat-scroll');
+  assert.equal(skip.textContent.trim(), 'Skip to conversation');
+  const dock = document.querySelector('.composer-dock .dock-meta');
+  assert.ok(dock?.querySelector('#model-chip'), 'the mode chip belongs to the dock the transcript measures');
+  assert.ok(dock?.querySelector('#notice-dot'), 'the minimized notice belongs to that same dock');
+});
+
+test('the floating window keeps the same dialog name and dock structure', () => {
+  const floating = new JSDOM(readFileSync(new URL('../floating.html', import.meta.url), 'utf8')).window.document;
+  const dialog = floating.getElementById('confirm-dialog');
+  assert.equal(dialog.getAttribute('aria-labelledby'), 'dialog-title');
+  assert.equal(dialog.getAttribute('aria-describedby'), 'dialog-description');
+  assert.ok(floating.querySelector('.composer-dock .dock-meta #model-chip'));
+  assert.ok(floating.querySelector('.composer-dock .dock-meta #notice-dot'));
+  assert.equal(floating.body.dataset.sheet, undefined);
+  assert.equal(floating.getElementById('settings-sheet').hasAttribute('inert'), true);
+});

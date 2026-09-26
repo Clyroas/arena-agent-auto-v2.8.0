@@ -25,6 +25,8 @@ test.beforeEach(async () => {
 test.afterEach(async () => { await context?.close(); });
 
 async function connect() {
+  // The conversation is the first surface. Connection controls live in the sheet, which starts closed.
+  if (await panel.locator('#settings-sheet').getAttribute('data-open') !== 'true') await panel.locator('#empty-connect').click();
   await panel.locator('#tabs').selectOption(String(tabId));
   await panel.locator('#confirmed').check(); await panel.locator('#authorize').check();
   await panel.locator('#connect').click();

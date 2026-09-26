@@ -395,3 +395,19 @@ test('option rows keep their button semantics inside the list', async () => {
         `the list must not contain ${child.tagName.toLowerCase()} with role ${child.getAttribute('role')}`);
   } finally { page.close(); }
 });
+
+test('a ready panel uses a short status label, and staged files are counted where the eye can see them', async () => {
+  const page = await open();
+  try {
+    assert.equal(page.w.document.getElementById('status').textContent, 'Ready');
+    assert.equal(page.w.document.getElementById('settings-sheet').dataset.open, 'false');
+    assert.equal(page.w.document.getElementById('attach-files').dataset.count, '');
+    assert.equal(page.ui.stageFiles([new File(['hello'], 'note.txt', { type: 'text/plain' })], 'pick'), true);
+    const attach = page.w.document.getElementById('attach-files');
+    assert.equal(attach.dataset.count, '1');
+    assert.match(attach.getAttribute('aria-label'), /1 file staged/);
+    page.ui.clear();
+    assert.equal(page.w.document.getElementById('settings-sheet').dataset.open, 'true', 'disconnect opens setup instead of leaving the user on a dead composer');
+    assert.equal(page.w.document.getElementById('prompt-count').hidden, true);
+  } finally { page.close(); }
+});
