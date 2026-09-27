@@ -33,7 +33,8 @@
     apply();
     font.addEventListener('change', () => { prefs = normalize({ ...prefs, fontSize: Number(font.value) }); save(); });
     accent.addEventListener('change', () => { prefs = normalize({ ...prefs, accent: accent.value }); save(); });
-    document.getElementById('reset-appearance').addEventListener('click', () => { prefs = { ...defaults }; save(); });
+    // Guarded so a missing reset control can never abort bind() and silently kill the other two.
+    document.getElementById('reset-appearance')?.addEventListener('click', () => { prefs = { ...defaults }; save(); });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind, { once: true });
   else bind();

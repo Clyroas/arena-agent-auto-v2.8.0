@@ -19,6 +19,10 @@ export async function attachAgent(tabId, expectedUrl) {
     // Repeated injection is idempotent and cannot submit a prompt.
     injected = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [0] }, world: 'ISOLATED',
+      // Do not wait for document_idle on a still-loading tab: all three files are safe to run
+      // early (listeners and definitions only — no top-level DOM access), and waiting burns the
+      // panel's ATTACH budget on slow pages.
+      injectImmediately: true,
       files: ['attachment-policy.js', 'agent-dom.js', 'agent-content.js']
     });
   } catch (error) {

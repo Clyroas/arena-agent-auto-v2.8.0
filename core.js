@@ -21,7 +21,15 @@ export function samePage(a, b) {
   try {
     const x = new URL(a), y = new URL(b);
     if (x.origin !== y.origin || x.pathname !== y.pathname || x.hash !== y.hash || !/^\/text\/direct\/?$/.test(x.pathname)) return false;
-    const rest = u => { const p = new URLSearchParams(u.search); p.delete('model_a'); p.delete('model'); return p.toString(); };
+    // Canonical, order-independent comparison: URLSearchParams.toString() preserves insertion
+    // order, but two URLs of the same Direct chat must compare equal no matter how Arena or its
+    // router orders the remaining parameters — otherwise a reorder reads as CONVERSATION_CHANGED.
+    const rest = u => {
+      const p = new URLSearchParams(u.search);
+      p.delete('model_a');
+      p.delete('model');
+      return new URLSearchParams([...p].sort(([k1], [k2]) => k1 < k2 ? -1 : k1 > k2 ? 1 : 0)).toString();
+    };
     return rest(x) === rest(y);
   } catch { return false; }
 }
