@@ -37,7 +37,8 @@ const port = {
     if (message.type === 'SEND') { sent.push(message); run = { requestId: message.requestId }; }
     if (message.type === 'PROBE') emitReady();
     if (message.type === 'PING') emit({ type: 'PONG' });
-    if (message.type === 'MODEL') emit({ type: 'MODEL_INFO', url: URL_AGENT, pageKind: 'agent', model: '', models: [] });
+    if (message.type === 'MODEL') emit({ type: 'MODEL_INFO', url: URL_AGENT, pageKind: 'agent', model: '', models: [], repoPickers: pickerState() });
+    if (message.type === 'PICKER') handlePickerDemo(message);
     if (message.type === 'ANSWER_QUESTION') run?.answer?.(message);
     if (message.type === 'CHOOSE_RESPONSE') run?.choose?.(message);
     if (message.type === 'LOAD_HISTORY') emitHistory(message.requestId);
@@ -45,10 +46,41 @@ const port = {
   },
   disconnect() {}
 };
-function emit(event) { portHandler?.({ documentId: 'dev-document', adapterVersion: '2.8.0', ...event }); }
+function emit(event) { portHandler?.({ documentId: 'dev-document', adapterVersion: '2.9.0', ...event }); }
+
+// ---------- fake repo/branch pickers (v2.9.0) -----------------------------------
+const REPOSITORIES = [
+  { label: 'Clyroas/arena-agent-auto-v2.8.0', meta: 'Updated 2 days ago' },
+  { label: 'Clyroas/arena-auto-chat', meta: 'Updated last week' },
+  { label: 'Clyroas/site-notes', meta: 'Updated 3 months ago' }
+];
+const BRANCHES = repo => (repo === 'Clyroas/site-notes'
+  ? [{ label: 'main', meta: 'default' }, { label: 'draft/pages', meta: '' }]
+  : [{ label: 'main', meta: 'default' }, { label: 'arena/picker-bar', meta: '' }, { label: 'fix/security-resume', meta: '' }]);
+const demoRepo = { repo: 'Clyroas/arena-agent-auto-v2.8.0', branch: 'main' };
+const pickerState = () => ({
+  repo: { present: true, value: demoRepo.repo, disabled: false },
+  branch: { present: true, value: demoRepo.branch, disabled: false }
+});
+function handlePickerDemo(message) {
+  const kind = message.kind, actionId = message.actionId;
+  const options = kind === 'repo' ? REPOSITORIES : BRANCHES(demoRepo.repo);
+  if (message.action === 'open') {
+    emit({ type: 'PICKER_STATE', actionId, kind, phase: 'open', options, query: '', repoPickers: pickerState() });
+  } else if (message.action === 'pick') {
+    if (!options.some(option => option.label === message.value)) {
+      emit({ type: 'PICKER_ERROR', actionId, kind, code: 'PICKER_NOT_FOUND', message: 'That option is not in Arena’s current list (it may have been filtered out). Nothing was clicked.', clicked: false, repoPickers: pickerState() });
+      return;
+    }
+    if (kind === 'repo') { demoRepo.repo = message.value; demoRepo.branch = 'main'; } else demoRepo.branch = message.value;
+    setTimeout(() => emit({ type: 'PICKER_STATE', actionId, kind, phase: 'done', value: message.value, repoPickers: pickerState() }), 450);
+  } else if (message.action === 'close') {
+    emit({ type: 'PICKER_STATE', actionId, kind, phase: 'closed', repoPickers: pickerState() });
+  }
+}
 function emitReady() {
   emit({ type: 'READY', url: URL_AGENT, inputKind: 'textarea', reviewPending: false, uploadKind: 'input', fileInputCount: 1, historyCount: 3,
-    pageKind: 'agent', model: '', models: [], blocked: '' });
+    pageKind: 'agent', model: '', models: [], blocked: '', repoPickers: pickerState() });
 }
 // Waits for the SEND the panel just posted (with attachments it is posted after a worker round-trip).
 async function nextSend() {
@@ -70,7 +102,8 @@ const worker = {
   STAGE_REVOKE: () => ({ ok: true, value: true }),
   OPEN_ARENA: () => ({ ok: true, value: { id: 2 } }),
   OPEN_FLOATING: () => ({ ok: true, value: true }),
-  NAVIGATE_TAB: () => ({ ok: true, value: true })
+  NAVIGATE_TAB: () => ({ ok: true, value: { windowId: 7, wasMinimized: false, previousWindowId: 7, previousNormalWindowId: null, previousTabId: null } }),
+  RESTORE_TAB: () => ({ ok: true, value: true })
 };
 
 globalThis.chrome = {
@@ -101,7 +134,15 @@ globalThis.chrome = {
 // ---------- load the real panel -------------------------------------------------
 const panelUrl = new URL('../panel.html', import.meta.url);
 const asset = path => new URL(path, panelUrl).href;
+const glassPreview = new URLSearchParams(location.search).get('design') === 'glass';
 document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: asset('../panel.css') }));
+if (glassPreview) {
+  document.documentElement.dataset.preview = 'glass';
+  document.title = 'Liquid Glass study · Arena Auto Chat (dev only)';
+  document.head.append(Object.assign(document.createElement('link'), {
+    rel: 'stylesheet', href: new URL('./liquid-glass-prototype.css', import.meta.url).href
+  }));
+}
 document.head.append(Object.assign(document.createElement('base'), { href: new URL('../', panelUrl).href }));
 
 const load = (src, type = '') => new Promise((resolve, reject) => {
@@ -115,7 +156,7 @@ async function boot() {
   const response = await fetch(panelUrl);
   if (!response.ok) throw new Error(`panel.html could not be fetched (${response.status}). Serve this folder over http:// (for example: python3 -m http.server 8080), not file://`);
   const markup = await response.text();
-  // The body tag carries attributes (<body data-sheet="open">), so match the tag, not a literal string.
+  // The body tag carries attributes, so match the tag, not a literal string.
   const body = markup.replace(/^[\s\S]*?<body[^>]*>/i, '').replace(/<\/body>[\s\S]*$/i, '');
   if (!body.includes('id="prepare"')) throw new Error('panel.html did not contain the panel markup');
   document.body.insertAdjacentHTML('afterbegin', body.replace(/<script[\s\S]*?<\/script>/g, ''));
@@ -140,8 +181,42 @@ function fail(error) {
 // ---------- connect to the fake tab ---------------------------------------------
 const $ = id => document.getElementById(id);
 try { await boot(); } catch (error) { fail(error); throw error; }
+if (glassPreview) {
+  const bar = document.getElementById('dev-bar');
+  bar.dataset.glassPreview = 'true';
+  bar.dataset.collapsed = 'true';
+  const label = document.createElement('span');
+  label.className = 'dev-label glass-label'; label.textContent = 'Liquid Glass · study only';
+  const theme = document.createElement('button');
+  theme.type = 'button'; theme.className = 'glass-theme';
+  theme.setAttribute('aria-label', 'Switch preview between light and dark themes');
+  const syncTheme = () => { theme.textContent = document.documentElement.dataset.theme === 'dark' ? 'Light view' : 'Dark view'; };
+  syncTheme();
+  theme.addEventListener('click', () => {
+    const select = document.getElementById('theme-select');
+    select.value = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    syncTheme();
+  });
+  const toggle = document.createElement('button');
+  toggle.type = 'button'; toggle.className = 'glass-toggle';
+  const syncToggle = () => {
+    const open = bar.dataset.collapsed !== 'true';
+    toggle.textContent = open ? 'Hide controls' : 'Show controls';
+    toggle.setAttribute('aria-expanded', String(open));
+  };
+  syncToggle();
+  toggle.addEventListener('click', () => { bar.dataset.collapsed = String(bar.dataset.collapsed !== 'true'); syncToggle(); });
+  bar.prepend(label, theme, toggle);
+  bar.addEventListener('click', event => {
+    if (!event.target.closest('button[data-act]')) return;
+    bar.dataset.collapsed = 'true'; syncToggle();
+  });
+}
 const until = async (predicate, tries = 100) => { for (let i = 0; i < tries; i++) { if (predicate()) return true; await wait(50); } return false; };
 await until(() => $('tabs').value === '1');
+// Connection controls live in the sheet, which starts closed so the chat is the first surface.
+if ($('settings-sheet').dataset.open !== 'true') $('empty-connect').click();
 $('confirmed').checked = true;
 $('authorize').checked = true;
 $('confirmed').dispatchEvent(new Event('change'));
@@ -258,6 +333,16 @@ const acts = {
   async history() {
     $('load-history').click();
     log('earlier turns imported above this session');
+  },
+  async pickers() {
+    // The chips sit in the composer; opening one emits Arena's own list, picking switches the demo repo.
+    log('repo & branch chips are in the composer — open one and pick an option');
+  },
+  async presets() {
+    // One chip in the dock opens the prompt library derived from the vendored agent-skills pack.
+    // Choosing one only fills the draft; Send stays the single way out.
+    log('the task-prompt chip is in the dock — open it, search, and pick one');
+    $('presets-chip').click();
   }
 };
 

@@ -22,6 +22,12 @@
     #dev-bar button:active { transform: scale(.95); }
     #dev-bar button[data-active="true"] { background: #0a84ff; }
     #dev-bar .dev-label { font-size: 11px; opacity: .7; padding: 0 4px; }
+    #dev-bar[data-glass-preview="true"] { background: rgba(21, 32, 48, .94); border: 1px solid rgba(255,255,255,.25); }
+    #dev-bar[data-glass-preview="true"] .glass-label { font-weight: 700; opacity: 1; }
+    #dev-bar[data-glass-preview="true"][data-collapsed="true"] button[data-act],
+    #dev-bar[data-glass-preview="true"][data-collapsed="true"] .glass-theme,
+    #dev-bar[data-glass-preview="true"][data-collapsed="true"] .dev-label:not(.glass-label) { display: none; }
+    #dev-bar[data-glass-preview="true"] .glass-toggle { background: rgba(255,255,255,.2); }
     #dev-log { position: fixed; z-index: 998; left: 8px; bottom: 8px; max-width: 46vw; font: 11px/1.45 ui-monospace, Menlo, monospace; color: rgba(255,255,255,.72); text-shadow: 0 1px 2px rgba(0,0,0,.5); pointer-events: none; }
     #dev-log div { opacity: .85; }
   </style>
@@ -37,6 +43,8 @@
     <button data-act="error">Arena error</button>
     <button data-act="attach">Staged file</button>
     <button data-act="history">Earlier turns</button>
+    <button data-act="pickers">Repo &amp; branch</button>
+    <button data-act="presets">Task prompts</button>
   </div>
   <div id="dev-log" aria-live="off"></div>
   <script type="module" src="preview.js"></script>

@@ -1,24 +1,32 @@
+import { selectAttachments, releaseTurnAttachments, restoreTurnAttachments } from './attachment-state.js';
+import { TabAwakeLease } from './tab-awake.js';
 import { setupFloatingGeometry } from './window-geometry.js';
 import { ConversationView } from './conversation-view.js';
-import { AgentClient } from './agent-client.js';
-import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl, withTimeout } from './core.js';
-import { liveStatus } from './live-status.js';
+import { AgentClient, normalizePickers } from './agent-client.js';
+import { AGENT_URL, isArena, isDirect, tabLabel, samePage, directModelUrl, withTimeout, capabilitySummary } from './core.js';
+import { liveStatus, questionState } from './live-status.js';
 import { recentModels, rememberModel } from './recent-models.js';
+import { SKILL_PRESETS, PRESET_GROUPS, findPresets, composePresetText } from './skill-presets.js';
 import { findLinks, hostLabel, captureLink, hasShotAccess, requestShotAccess, removeShotAccess } from './screenshot.js';
 import './attachment-policy.js'; // Registers ArenaAgentAttachments (same text the page adapter loads).
-const { ATTACHMENT_POLICY, validateAttachments, bytesToBase64, formatBytes } = globalThis.ArenaAgentAttachments;
+const { ATTACHMENT_POLICY, bytesToBase64, formatBytes } = globalThis.ArenaAgentAttachments;
 const $ = id => document.getElementById(id);
 const floating = location.pathname === '/floating.html';
 if (floating) setupFloatingGeometry();
 const conversation = new ConversationView(document, answerQuestion, chooseResponse);
 let tab = null, client = null, pending = null, turns = [], state = 'disconnected';
 let busy = false, epoch = 0, dialogResolve = null, switching = false;
-let historyRequest = null;
+let historyRequest = null, historyTimer = null;
+let actionId = 0, requestedModel = '';
+// One repo/branch picker dialog at a time: { actionId, kind, options, phase, error }. The actionId ties
+// panel and tab together, so a frame from a dialog the user already closed can never act as the current one.
+let pickerAction = null;
+const awakeLease = new TabAwakeLease();
 const staged = []; // Staged files live in memory only, until an accepted send or a local reset.
 let shotAccess = false, shotBusy = '', shotProgress = '', shotSignature = ''; // link screenshots (v2.6.0)
-const shotDone = new Set();
+let shotOperation = null;
 $('attachment-input').accept = ATTACHMENT_POLICY.accept;
-const labels = { disconnected: 'Disconnected', connecting: 'Checking controls…', reconnecting: 'Reconnecting…', ready: 'Auto ready', sending: 'Sending…', waiting: 'Waiting for Arena', error: 'Stopped · check tab' };
+const labels = { disconnected: 'Disconnected', connecting: 'Checking…', reconnecting: 'Reconnecting…', ready: 'Ready', sending: 'Sending…', waiting: 'Waiting', error: 'Stopped' };
 // One-shot worker requests are always bounded (see withTimeout in core.js). A suspended, restarting or
 // updated service worker must never leave this panel permanently busy: a late answer is ignored and the
 // caller gets a clear error it can show, instead of a spinner that never ends.
@@ -36,14 +44,16 @@ const rpc = async (type, extra = {}) => {
   if (!result?.ok) throw new Error(result?.error || 'The extension worker did not respond. Reload the extension and Arena tab.');
   return result.value;
 };
+let sheetOpener = null;
 // Settings sheet: slides up under the toolbar; the chat stays the focus when it is closed.
 function setSheet(open, { restoreFocus = true } = {}) {
   const sheet = $('settings-sheet'), was = sheet.dataset.open === 'true';
   sheet.dataset.open = String(open); document.body.dataset.sheet = open ? 'open' : '';
-  sheet.inert = !open; $('message-arena').inert = open;
+  if (open && !was) sheetOpener = document.activeElement;
+  sheet.inert = !open; document.querySelector('.app').inert = open;
   for (const id of ['settings-button', 'status-pill']) $(id).setAttribute('aria-expanded', String(open));
-  if (open && !was) requestAnimationFrame(() => $('sheet-done').focus({ preventScroll: true }));
-  if (!open && was && restoreFocus && sheet.contains(document.activeElement)) (!$('prompt').disabled ? $('prompt') : $('settings-button')).focus({ preventScroll: true });
+  if (open && (!was || !sheet.contains(document.activeElement))) requestAnimationFrame(() => { if (sheet.dataset.open === 'true' && !document.querySelector('dialog[open]')) $('sheet-done').focus({ preventScroll: true }); });
+  if (!open && was && restoreFocus && sheet.contains(document.activeElement)) (sheetOpener?.isConnected && !sheetOpener.disabled && sheetOpener !== document.body ? sheetOpener : !$('prompt').disabled ? $('prompt') : $('settings-button')).focus({ preventScroll: true });
 }
 const toggleSheet = () => setSheet($('settings-sheet').dataset.open !== 'true');
 $('settings-button').addEventListener('click', toggleSheet);
@@ -52,6 +62,13 @@ $('sheet-done').addEventListener('click', () => setSheet(false));
 $('sheet-backdrop').addEventListener('click', () => setSheet(false));
 $('empty-connect').addEventListener('click', () => setSheet(true));
 document.addEventListener('keydown', event => {
+  if (event.key === 'Tab' && $('settings-sheet').dataset.open === 'true' && !document.querySelector('dialog[open]')) {
+    const controls = [...$('settings-sheet').querySelectorAll('button:not(:disabled),select:not(:disabled),input:not(:disabled),summary,[tabindex="0"]')]
+      .filter(el => el.getClientRects().length && !el.closest('[hidden],[inert]'));
+    const first = controls[0], last = controls.at(-1);
+    if (first && event.shiftKey && (document.activeElement === first || !$('settings-sheet').contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+    else if (first && !event.shiftKey && (document.activeElement === last || !$('settings-sheet').contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+  }
   // Ctrl/⌘+K opens the model picker (only when connected and idle; the chip's own rules apply).
   if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k' && !event.repeat) {
     if (document.querySelector('dialog[open]') || $('settings-sheet').dataset.open === 'true') return;
@@ -59,10 +76,20 @@ document.addEventListener('keydown', event => {
   }
   if (event.key === 'Escape' && $('settings-sheet').dataset.open === 'true' && !$('confirm-dialog').open) { event.preventDefault(); setSheet(false); }
 });
-// The composer grows with its text up to a cap, like Messages.
-function fitPrompt() { const field = $('prompt'); field.style.height = 'auto'; field.style.height = `${field.scrollHeight}px`; }
+// The composer grows with its text up to a cap, like Messages. Live frames call this on every render;
+// measuring only when the text or the field's width changed keeps a streaming reply from thrashing layout.
+let promptFit = { value: null, width: -1 };
+function fitPrompt() {
+  const field = $('prompt');
+  const width = field.clientWidth;
+  if (promptFit.value === field.value && promptFit.width === width && field.style.height) return;
+  promptFit = { value: field.value, width };
+  field.style.height = 'auto';
+  field.style.height = `${field.scrollHeight}px`;
+}
 $('prompt').addEventListener('input', fitPrompt);
-$('prompt').addEventListener('input', () => renderShotChips());
+if (typeof ResizeObserver === 'function') new ResizeObserver(() => fitPrompt()).observe($('prompt'));
+$('prompt').addEventListener('input', () => { if (shotOperation) { cancelScreenshot('Screenshot cancelled because the draft changed.'); render(); } else renderShotChips(); });
 // Arena's message box takes up to 30,000 characters here; show the count near the limit and say so when a
 // paste had to be cut (the browser silently drops the rest at maxlength).
 const PROMPT_LIMIT = 30000;
@@ -71,7 +98,9 @@ function renderPromptCount() {
   const length = $('prompt').value.length, box = $('prompt-count');
   const show = length >= PROMPT_LIMIT * 0.8 || promptCut > 0;
   box.hidden = !show;
-  if (!show) return;
+  // Nothing to report: drop the text as well as the node, so a reset can never leave the previous
+  // draft's count sitting invisibly in the markup.
+  if (!show) { box.textContent = ''; return; }
   box.dataset.full = String(length >= PROMPT_LIMIT);
   box.textContent = `${length.toLocaleString('en-US')} / ${PROMPT_LIMIT.toLocaleString('en-US')} characters`
     + (promptCut ? ` · your paste was cut: ${promptCut.toLocaleString('en-US')} characters did not fit. Send the rest in a follow-up message or attach it as a .txt file.` : '');
@@ -84,7 +113,7 @@ $('prompt').addEventListener('paste', event => {
   setTimeout(renderPromptCount, 0);
 });
 $('prompt').addEventListener('input', event => { if (event.inputType !== 'insertFromPaste') promptCut = 0; renderPromptCount(); });
-setSheet(true); // Disconnected on open: show the connection setup.
+setSheet(false); // The conversation is the surface. Setup opens from the empty state, the status pill, or after disconnect.
 // Messages appear in full, then tuck away into a small dot in the chat corner. Info shrinks by itself
 // after a few seconds (not while hovered/focused); errors stay until you minimize them.
 const NOTICE_AUTO_MS = 6000;
@@ -120,24 +149,41 @@ function notice(text = '') {
 $('notice-minimize').addEventListener('click', () => { clearTimeout(noticeTimer); setNoticeOpen(false); $('notice-dot').focus({ preventScroll: true }); });
 $('notice-dot').addEventListener('click', () => { $('notice-dot').classList.remove('fresh'); setNoticeOpen(true); armNoticeTimer(); });
 $('notice').addEventListener('mouseleave', armNoticeTimer);
+// A reconnect is possible exactly when the session is stopped on a known Arena tab and nothing else is
+// running: the toolbar button shows itself then, and only then.
+const canReconnect = () => state === 'error' && !!tab && !busy;
 function render() {
+  // Semantic capability / drift check for the connected tab (see core.js capabilitySummary). A page that
+  // no longer exposes a control the adapter drives blocks Send with a coded reason instead of failing
+  // later, mid-send. Missing upload support is not drift: text chat still works.
+  const drift = client?.ready ? capabilitySummary(client.capabilities) : null;
   $('status').textContent = labels[state]; $('status').dataset.state = state;
+  $('status-pill').title = state === 'error' ? 'Stopped. Check the Arena tab, then open connection settings.' : `${labels[state]}. Open connection settings.`;
+  $('reconnect-button').hidden = !canReconnect();
   document.body.dataset.working = String(!!pending && pending.status !== 'error');
   document.body.dataset.connected = String(!!client?.ready);
   $('connected').hidden = !tab;
   $('connect').disabled = busy || !!tab || !$('tabs').value || !$('confirmed').checked || !$('authorize').checked;
   $('tabs').disabled = busy || !!tab;
   $('confirmed').disabled = busy || !!tab; $('authorize').disabled = busy || !!tab;
-  $('prepare').disabled = busy || state !== 'ready' || !client?.ready || !!pending;
+  $('prepare').disabled = busy || switching || !!shotOperation || !!requestedModel || !!pickerAction || !!drift?.drift || !!client?.silent || state !== 'ready' || !client?.ready || !!pending;
   // While reattaching, the draft stays editable; Send waits for the verified connection.
   $('prompt').disabled = pending ? true : busy || (state !== 'reconnecting' && (state !== 'ready' || !client?.ready));
   const uploadReady = client?.ready && client.uploadKind === 'input';
-  $('attach-files').disabled = busy || !!pending || state !== 'ready' || !uploadReady;
+  $('attach-files').disabled = busy || !!pending || !!pickerAction || state !== 'ready' || !uploadReady;
+  $('attach-files').dataset.count = staged.length ? String(staged.length) : '';
+  $('attach-files').setAttribute('aria-label', `Attach images or files from your computer${staged.length ? `, ${staged.length} file${staged.length === 1 ? '' : 's'} staged` : ''}`);
   $('attach-files').title = uploadReady ? 'Attach images or files from your computer' : 'Staged files can only be sent after the Arena tab exposes its composer file input. Attach them in Arena until then.';
   $('prepare').textContent = staged.length ? `Send to Arena · ${staged.length} file${staged.length > 1 ? 's' : ''}` : 'Send to Arena';
   $('prepare').title = staged.length ? 'Send this message together with the staged files' : '';
-  $('prompt').placeholder = state === 'ready' ? 'Type a message to send to Arena…' : state === 'reconnecting' && !pending ? 'Reconnecting to Arena… you can keep typing' : pending?.live?.questions?.length ? 'Answer the question cards above to continue…' : pending ? 'Arena is working on this task…' : 'Connect your Arena tab to start…';
+  $('prompt').placeholder = state === 'ready' ? 'Type a message to send to Arena…' : state === 'reconnecting' && !pending ? 'Reconnecting to Arena… you can keep typing' : questionState(pending?.live?.questions) === 'answerable' ? 'Answer the question cards above to continue…' : pending ? 'Arena is working on this task…' : 'Connect your Arena tab to start…';
   for (const id of ['refresh', 'open', 'open-direct-tab', 'focus', 'reconnect', 'disconnect', 'cancel', 'float-window']) $(id).disabled = busy;
+  $('connection-escape').hidden = !['connecting', 'reconnecting'].includes(state);
+  $('connection-focus').disabled = !tab;
+  $('model-confirmation').hidden = !requestedModel;
+  $('model-confirmation-text').textContent = requestedModel ? `Requested “${requestedModel}”; Arena shows “${client?.model || 'unknown'}”. Send is blocked until you confirm the actual model.` : '';
+  $('accept-current-model').disabled = busy || switching || !client?.ready || !client.model;
+  for (const button of document.querySelectorAll('.attachment-remove')) button.disabled = busy || !!pending;
   $('pending').hidden = !pending;
   $('connection-info').hidden = !tab;
   $('connection-summary-text').textContent = tab ? `Tab ${tab.id} · ${tab.title || 'Arena'}` : 'Choose your Arena tab';
@@ -145,17 +191,20 @@ function render() {
   $('connected-tab-short').textContent = tab ? `Tab ${tab.id}` : '';
   $('connected-tab-short').title = tab?.url || '';
   $('pending').dataset.state = pending?.status || '';
-  $('pending').dataset.question = String(!!pending?.live?.questions?.length && pending?.status !== 'error');
+  $('pending').dataset.question = String(questionState(pending?.live?.questions) === 'answerable' && pending?.status !== 'error');
   $('tab-name').textContent = tab ? tabLabel(tab) : '';
   $('tab-url').textContent = tab?.url || '';
-  $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.8.0 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
-  $('progress').textContent = pending?.status === 'error' ? 'Capture stopped. Read the error above and check the Arena tab. No manual reply entry is available.' : pending?.phase === 'review' ? 'Closing the task-review panel and waiting for the composer. No feedback is selected.' : pending?.live?.questions?.length ? 'Review the question cards above. Select an answer, then submit it explicitly. Sensitive or unsupported actions stay in Arena.' : pending?.status === 'waiting' ? 'Your message is in Arena. The status above follows its visible activity; the final reply appears separately — no response time limit. Approvals and unsupported controls stay in Arena.' : pending?.phase === 'upload' ? 'Placing your staged files into the Arena composer, then attempting exactly one Send click…' : 'Preparing the Arena composer and attempting exactly one Send click…';
+  $('adapter-state').textContent = client?.ready ? (client.reviewPending ? 'Agent task-review panel detected. On your next Send, only its Close control will be used; no feedback will be selected.' : `${client.pageKind === 'direct' ? 'Direct' : 'Agent'} content script v2.9.0 verified · ${client.inputKind} input · upload: ${client.uploadKind === 'input' ? 'composer file input ready' : client.uploadKind === 'unsupported' ? 'a restricted or ambiguous file input — staged files cannot be sent' : client.uploadKind === 'button-only' ? 'site picker only — attach in Arena' : 'not detected — staged files cannot be sent'}${drift ? ` · ${drift.text}` : ''}`) : 'Agent control check not ready. Reconnect after fixing the reported issue.';
+  $('adapter-state').dataset.drift = String(!!drift?.drift);
+  $('progress').textContent = pending?.status === 'error' ? 'Capture stopped. Read the error above and check the Arena tab. No manual reply entry is available.' : pending?.securityHold ? 'Tracking is paused until Arena’s security verification is completed in the Arena tab. It resumes automatically; nothing is resent.' : pending?.phase === 'review' ? 'Closing the task-review panel and waiting for the composer. No feedback is selected.' : questionState(pending?.live?.questions) === 'answerable' ? 'Review the question cards above. Select an answer, then submit it explicitly. Sensitive or unsupported actions stay in Arena.' : pending?.status === 'waiting' ? 'Your message is in Arena. The status above follows its visible activity; the final reply appears separately — no response time limit. Approvals and unsupported controls stay in Arena.' : pending?.phase === 'upload' ? 'Placing your staged files into the Arena composer, then attempting exactly one Send click…' : 'Preparing the Arena composer and attempting exactly one Send click…';
   const found = client?.ready ? client.historyCount || 0 : 0, imported = turns.filter(t => t.imported).length;
   $('history-import').hidden = !client?.ready || (!found && !imported);
   $('load-history').disabled = busy || !!historyRequest || !!pending || state !== 'ready';
   $('load-history').textContent = historyRequest ? 'Loading earlier messages…' : imported ? 'Reload earlier messages' : `Load earlier messages (${found} found)`;
   $('history-import-note').textContent = imported ? `${imported} imported from the Arena page` : 'Read-only · from this Arena chat';
   renderModelChip();
+  renderPickerBar();
+  renderPresetChip();
   conversation.render(turns, pending, state);
   updateLiveStatus();
   fitPrompt();
@@ -177,10 +226,13 @@ function updateLiveStatus() {
 
 function closeClient() { client?.close(); client = null; }
 function clear() {
-  epoch++; closeClient(); stopRecovery(); if (awakeTab !== null) keepTabAwake(awakeTab, false);
-  tab = null; pending = null; turns = []; state = 'disconnected'; historyRequest = null;
+  epoch++; cancelScreenshot(); clearHistoryRequest(); closeClient(); stopRecovery(); if (awakeTab !== null) keepTabAwake(awakeTab, false);
+  for (const turn of turns) releaseTurnAttachments(turn);
+  tab = null; pending = null; turns = []; state = 'disconnected'; requestedModel = '';
+  $('attachment-status').textContent = ''; $('shot-status').textContent = '';
   $('connection-details').open = true; setSheet(true);
-  $('prompt').value = ''; $('confirmed').checked = false; $('authorize').checked = false;
+  $('prompt').value = ''; promptCut = 0; renderPromptCount(); // the counter belongs to the draft, not to the panel
+  $('confirmed').checked = false; $('authorize').checked = false;
   for (const file of staged) if (file.url) URL.revokeObjectURL(file.url);
   staged.length = 0; renderAttachments();
   notice(); render();
@@ -220,7 +272,11 @@ function renderModelChip() {
   chip.dataset.kind = direct ? 'direct' : 'agent';
   chip.title = pending ? 'Wait for the current reply before switching' : 'Choose a Direct model or Agent Mode (opens a new chat in Arena) · Ctrl/⌘+K';
 }
-function modelGroup(text) { const label = document.createElement('p'); label.className = 'model-group'; label.textContent = text; return label; }
+function modelGroup(text) {
+  const label = document.createElement('p'); label.className = 'model-group'; label.textContent = text;
+  // The list's non-option content stays out of the list semantics the rows carry (see optionFor).
+  label.setAttribute('role', 'presentation'); return label;
+}
 function renderModelList() {
   const direct = client?.pageKind === 'direct', models = client?.models || [];
   $('mode-direct').setAttribute('aria-pressed', String(direct)); $('mode-agent').setAttribute('aria-pressed', String(!direct));
@@ -235,19 +291,24 @@ function renderModelList() {
   const recent = recentNames.map(n => shown.find(m => m.name.toLowerCase() === n)).filter(Boolean);
   const rest = recent.length ? shown.filter(m => !recent.includes(m)) : shown;
   const optionFor = model => {
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option'; button.setAttribute('role', 'listitem');
+    // One row per option: the list owns the row, the button keeps its own semantics. `role="listitem"`
+    // directly on a <button> would replace the button role in the accessibility tree, so these rows used
+    // to be announced as list items with nothing to activate.
+    const row = document.createElement('div'); row.className = 'model-row'; row.setAttribute('role', 'listitem');
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option';
     button.dataset.name = model.name; button.setAttribute('aria-current', String(model.name.toLowerCase() === current));
     const name = document.createElement('span'); name.className = 'model-option-name'; name.textContent = model.name;
     const meta = document.createElement('span'); meta.className = 'model-option-meta';
     meta.textContent = [model.org, model.image ? 'images' : '', model.file ? 'files' : ''].filter(Boolean).join(' · ');
     button.append(name, meta);
     button.addEventListener('click', () => switchChat('direct', model.name));
-    return button;
+    row.append(button);
+    return row;
   };
   $('model-list').replaceChildren(...(recent.length
     ? [modelGroup('Recent'), ...recent.map(optionFor), modelGroup('All models'), ...rest.slice(0, 200).map(optionFor)]
     : rest.slice(0, 200).map(optionFor)));
-  if (!shown.length && models.length) { const empty = document.createElement('p'); empty.className = 'model-empty'; empty.textContent = 'No model matches that search.'; $('model-list').append(empty); }
+  if (!shown.length && models.length) { const empty = document.createElement('p'); empty.className = 'model-empty'; empty.setAttribute('role', 'presentation'); empty.textContent = 'No model matches that search.'; $('model-list').append(empty); }
 }
 function openModelDialog() {
   if ($('model-chip').disabled) return;
@@ -280,7 +341,7 @@ async function confirmModel(name) {
   const version = epoch;
   for (let i = 0; i < 16 && client?.ready && epoch === version; i++) {
     if (sameModel(client.model, name)) return true;
-    if (client.blocked) { i = 0; if (!$('notice-text').textContent.startsWith('ARENA_DIALOG_OPEN')) notice(`ARENA_DIALOG_OPEN: ${client.blocked}`); }
+    if (client.blocked) { if (!$('notice-text').textContent.startsWith('ARENA_DIALOG_OPEN')) notice(`ARENA_DIALOG_OPEN: ${client.blocked}`); }
     try { client.queryModel(); } catch { return false; }
     await new Promise(r => { setTimeout(r, 500); });
   }
@@ -290,33 +351,233 @@ async function switchChat(kind, name = '') {
   if (!tab || pending || busy || switching) return;
   const target = kind === 'agent' ? AGENT_URL : directModelUrl(name);
   const title = kind === 'agent' ? 'Open Agent Mode?' : name ? `New chat with ${name}?` : 'Open a new Direct chat?';
-  const body = `Your connected Arena tab will open ${kind === 'agent' ? 'Agent Mode' : name ? `a new Direct chat with “${name}” selected by Arena` : 'a new Direct chat'}. Nothing is sent. This panel’s chat view is cleared; your Arena history is unchanged.${$('prompt').value || staged.length ? ' Your draft and staged files stay here.' : ''}`;
+  const body = `Your connected Arena tab will open ${kind === 'agent' ? 'Agent Mode' : name ? `a new Direct chat with “${name}” selected by Arena` : 'a new Direct chat'}. Arena is brought to the foreground automatically so the page can load, then your previous page is restored. Nothing is sent. This panel’s chat view is cleared; your Arena history is unchanged.${$('prompt').value || staged.length ? ' Your draft and staged files stay here.' : ''}`;
   $('model-dialog').close();
   if (!await askConfirm(title, body, 'Open', 'Cancel')) return;
   const tabId = tab.id;
-  switching = true; epoch++; closeClient(); stopRecovery();
+  switching = true; epoch++; cancelScreenshot(); clearHistoryRequest(); closeClient(); stopRecovery();
+  const switchEpoch = epoch, switchOperation = ++actionId; requestedModel = kind === 'direct' ? name : '';
+  for (const turn of turns) releaseTurnAttachments(turn);
   pending = null; turns = []; historyRequest = null; state = 'connecting';
   notice(kind === 'agent' ? 'Opening Agent Mode in your Arena tab…' : `Opening a new Direct chat${name ? ` with ${name}` : ''} in your Arena tab…`); render();
   const load = waitForTabLoad(tabId);
+  let nav = null;
   try {
-    await rpc('NAVIGATE_TAB', { tabId, url: target });
+    nav = await rpc('NAVIGATE_TAB', { tabId, url: target });
     await load.done;
-    switching = false;
+    if (epoch !== switchEpoch) return;
     await connect(tabId);
-    if (!client?.ready) return;
+    if (switchOperation !== actionId || !client?.ready) return;
     if (kind === 'direct' && name) {
       const confirmed = await confirmModel(name);
-      if (!client?.ready) return;
-      if (confirmed) rememberModel(client.model);
+      if (switchOperation !== actionId || !client?.ready) return;
+      if (confirmed) { requestedModel = ''; rememberModel(client.model); }
       notice(confirmed ? `New Direct chat with ${client.model}. Send a message below — nothing has been sent yet.`
         : `MODEL_NOT_CONFIRMED: Arena shows “${client?.model || 'an unknown model'}” instead of “${name}”. Check or change the model in Arena’s picker before sending — the extension will not switch it for you.`);
     } else notice(client.pageKind === 'direct' ? `New Direct chat${client.model ? ` with ${client.model}` : ''}. Pick a model from the chip above the message box if you like.` : 'Agent Mode is ready. Send a message below.');
   } catch (error) {
-    load.cancel(); state = 'error'; notice(error.message || 'Could not open that Arena page. Open Settings to reconnect.');
-  } finally { switching = false; render(); }
+    load.cancel(); if (switchOperation === actionId) { state = 'error'; notice(error.message || 'Could not open that Arena page. Open Settings to reconnect.'); }
+  } finally {
+    if (nav) await rpc('RESTORE_TAB', nav).catch(() => {});
+    if (switchOperation === actionId) { switching = false; render(); }
+  }
 }
 // Keep the chip current if the model is changed in Arena's own picker.
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && client?.ready) { try { client.queryModel(); } catch { /* ignore */ } } });
+
+// ---- Arena Agent Mode repo & branch pickers (v2.9.0) -------------------------------------------
+// When Arena's agent is connected to a GitHub repository, its composer shows a repository and a branch
+// picker. The panel mirrors the two buttons; clicking one opens Arena's own picker in the Arena tab,
+// reads its option list, and shows it here. Choosing an option clicks Arena's option exactly once and
+// is confirmed from what its button then shows — the same "drive the page, verify, never guess" rules
+// as every other control. Nothing is requested from GitHub and nothing is sent.
+function renderPickerBar() {
+  const pickers = client?.ready ? client.repoPickers : null;
+  const agent = !!client?.ready && client.pageKind !== 'direct';
+  const bar = $('picker-bar');
+  bar.hidden = !(agent && (pickers?.repo?.present || pickers?.branch?.present));
+  const setChip = kind => {
+    const chip = $(`${kind}-chip`), label = $(`${kind}-chip-label`), entry = pickers?.[kind];
+    chip.disabled = busy || switching || !!pending || !!pickerAction || !entry?.present || !!entry?.disabled;
+    label.textContent = entry?.value || (kind === 'repo' ? 'Repository' : 'Branch');
+    label.title = entry?.value || '';
+    chip.title = !entry?.present ? `Arena is not showing its ${kind === 'repo' ? 'repository' : 'branch'} picker here`
+      : entry?.disabled ? `Arena’s ${kind === 'repo' ? 'repository' : 'branch'} picker is unavailable right now`
+      : pending ? 'Wait for the current reply before switching'
+      : `Choose the ${kind === 'repo' ? 'GitHub repository' : 'branch'} Arena works on — uses Arena’s own picker`;
+  };
+  setChip('repo'); setChip('branch');
+}
+function pickerOptionRow(option, kind, phase) {
+  // Same row/button split as the model list: the row is the list item, the button is the control.
+  const row = document.createElement('div'); row.className = 'model-row'; row.setAttribute('role', 'listitem');
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'model-option';
+  const current = client?.repoPickers?.[kind]?.value || '';
+  button.setAttribute('aria-current', String(option.label === current));
+  button.dataset.name = option.label;
+  const name = document.createElement('span'); name.className = 'model-option-name'; name.textContent = option.label;
+  const meta = document.createElement('span'); meta.className = 'model-option-meta'; meta.textContent = option.meta || '';
+  button.append(name, meta);
+  button.disabled = !!option.disabled || phase !== 'open';
+  button.title = option.disabled ? 'Arena lists this option as unavailable right now' : `Switch Arena’s ${kind === 'repo' ? 'repository' : 'branch'} to ${option.label}`;
+  button.addEventListener('click', () => pickFromDialog(option.label));
+  row.append(button);
+  return row;
+}
+function renderPickerDialog() {
+  if (!pickerAction || !$('picker-dialog').open) return;
+  const { kind, options, phase, error } = pickerAction;
+  const status = $('picker-status');
+  status.dataset.kind = error ? 'error' : 'info';
+  status.textContent = error || (phase === 'opening' ? 'Opening Arena’s picker in the Arena tab…' : phase === 'picking' ? `Asking Arena to switch ${kind === 'repo' ? 'repository' : 'branch'}…` : options.length ? '' : 'Arena’s picker is open, but no options were found.');
+  const query = $('picker-search').value.trim().toLowerCase();
+  const shown = options.filter(option => !query || option.label.toLowerCase().includes(query) || (option.meta || '').toLowerCase().includes(query));
+  $('picker-list').replaceChildren(...shown.map(option => pickerOptionRow(option, kind, phase)));
+  if (!shown.length && options.length) { const empty = document.createElement('p'); empty.className = 'model-empty'; empty.setAttribute('role', 'presentation'); empty.textContent = 'No option matches that search.'; $('picker-list').append(empty); }
+}
+function openPickerDialog(kind) {
+  const chip = $(`${kind}-chip`);
+  if (chip.disabled || $('picker-dialog').open || !client?.ready) return;
+  pickerAction = { actionId: crypto.randomUUID(), kind, options: [], phase: 'opening', error: '' };
+  try { client.picker(pickerAction.actionId, kind, 'open'); }
+  catch (error) { pickerAction = null; notice(error.message || 'The picker could not be opened. Check the Arena tab.'); render(); return; }
+  $('picker-dialog-title').textContent = kind === 'repo' ? 'Repository' : 'Branch';
+  $('picker-search').value = '';
+  try { $('picker-dialog').showModal(); } catch { /* already closing */ }
+  renderPickerDialog();
+  render();
+}
+function pickFromDialog(value) {
+  if (!pickerAction || pickerAction.phase !== 'open' || !client?.ready) return;
+  pickerAction.phase = 'picking'; pickerAction.error = '';
+  try { client.picker(pickerAction.actionId, pickerAction.kind, 'pick', value); }
+  catch (error) { pickerAction.phase = 'open'; pickerAction.error = error.message || 'The choice could not be sent. Check the Arena tab.'; notice(pickerAction.error); }
+  renderPickerDialog();
+}
+// Closing the panel dialog (Done, Escape, backdrop, or a finished pick) also dismisses Arena's own
+// picker in the tab. One close request, best effort; the tab reports if Arena kept it open.
+function endPickerDialog() {
+  const action = pickerAction;
+  if (!action) return;
+  pickerAction = null;
+  try { client?.picker(action.actionId, action.kind, 'close'); } catch { /* the connection reports its own state */ }
+  render();
+}
+function receivePicker(event) {
+  if (!pickerAction || event.actionId !== pickerAction.actionId) return; // a frame from a dialog already closed
+  if (event.type === 'PICKER_ERROR') {
+    pickerAction.error = `${event.code}: ${event.message}`;
+    if (pickerAction.phase === 'picking') pickerAction.phase = 'open'; // the option list is still valid
+    if (event.repoPickers && client) client.repoPickers = normalizePickers(event.repoPickers);
+    notice(pickerAction.error);
+    renderPickerDialog(); return;
+  }
+  if (event.repoPickers && client) client.repoPickers = normalizePickers(event.repoPickers);
+  if (event.phase === 'open') {
+    pickerAction.options = Array.isArray(event.options) ? event.options.slice(0, 200) : [];
+    pickerAction.phase = 'open'; pickerAction.error = '';
+    renderPickerDialog();
+  } else if (event.phase === 'done') {
+    pickerAction = null;
+    try { $('picker-dialog').close(); } catch { /* already closed */ }
+    notice(`Arena switched its ${event.kind === 'repo' ? 'repository' : 'branch'} to ${event.value || 'your choice'}. Nothing was sent.`);
+  } else if (event.phase === 'closed') {
+    pickerAction = null;
+    try { $('picker-dialog').close(); } catch { /* already closed */ }
+  }
+}
+$('repo-chip').addEventListener('click', () => openPickerDialog('repo'));
+$('branch-chip').addEventListener('click', () => openPickerDialog('branch'));
+$('picker-close').addEventListener('click', () => $('picker-dialog').close());
+$('picker-dialog').addEventListener('close', endPickerDialog);
+$('picker-search').addEventListener('input', renderPickerDialog);
+
+// ---- Ready-made task prompts from the vendored agent-skills pack (v2.9.0) ---------------------
+// The pack guides coding agents in this repository but is never shipped in the extension (AGENTS.md),
+// so scripts/build-skill-presets.mjs derives skill-presets.js from it. Choosing a preset only writes
+// into the composer: the single-click, no-retry Send below stays the only way out, and nothing here
+// is stored, sent or retried.
+function renderPresetChip() {
+  const chip = $('presets-chip');
+  chip.hidden = $('prompt').disabled; // nothing to insert into a draft you cannot type in
+  chip.disabled = busy || !!pending || $('presets-dialog').open;
+  chip.title = `Insert a ready-made task prompt · ${SKILL_PRESETS.length} workflows from the agent-skills pack`;
+  // A modal dialog over a composer you can no longer type in would only trap focus.
+  if ($('presets-dialog').open && $('prompt').disabled) closePresetsDialog();
+}
+function presetGroupHeading(text) {
+  const label = document.createElement('p'); label.className = 'model-group'; label.textContent = text;
+  label.setAttribute('role', 'presentation'); return label;
+}
+function presetOptionRow(preset, draft) {
+  // Same row/button split as the model and picker lists: the row is the list item, the button is the
+  // control, so a screen reader still announces something to activate.
+  const row = document.createElement('div'); row.className = 'model-row'; row.setAttribute('role', 'listitem');
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'model-option'; button.dataset.preset = preset.id;
+  button.setAttribute('aria-current', String(draft.includes(preset.prompt)));
+  const name = document.createElement('span'); name.className = 'model-option-name presets-label'; name.textContent = preset.label;
+  const meta = document.createElement('span'); meta.className = 'model-option-meta presets-summary'; meta.textContent = preset.summary;
+  button.append(name, meta);
+  button.addEventListener('click', () => insertPreset(preset));
+  row.append(button);
+  return row;
+}
+function renderPresetList() {
+  if (!$('presets-dialog').open) return;
+  const draft = $('prompt').value, shown = findPresets($('presets-search').value);
+  const rows = [];
+  for (const group of PRESET_GROUPS) {
+    const inGroup = shown.filter(preset => preset.group === group);
+    if (!inGroup.length) continue;
+    rows.push(presetGroupHeading(group), ...inGroup.map(preset => presetOptionRow(preset, draft)));
+  }
+  $('presets-list').replaceChildren(...rows);
+  if (!shown.length) {
+    const empty = document.createElement('p'); empty.className = 'model-empty'; empty.setAttribute('role', 'presentation');
+    empty.textContent = 'No prompt matches that search.'; $('presets-list').append(empty);
+  }
+  $('presets-status').textContent = shown.length
+    ? `${shown.length} of ${SKILL_PRESETS.length} prompts · choosing one fills your draft`
+    : '';
+}
+function closePresetsDialog() {
+  try { $('presets-dialog').close(); } catch { /* already closed */ }
+}
+function openPresetsDialog() {
+  const chip = $('presets-chip');
+  // One modal dialog at a time, and never over a draft that cannot be typed in.
+  if (chip.disabled || chip.hidden || document.querySelector('dialog[open]')) return;
+  $('presets-search').value = '';
+  try { $('presets-dialog').showModal(); } catch { /* already closing */ }
+  // You open this dialog to find a workflow, so the search field takes the focus — not Done.
+  $('presets-search').focus({ preventScroll: true });
+  renderPresetList(); render();
+}
+function insertPreset(preset) {
+  const field = $('prompt');
+  if (field.disabled) return;
+  const composed = composePresetText(field.value, preset, PROMPT_LIMIT);
+  if (!composed.ok) {
+    // Fail closed and visibly: a silently truncated workflow prompt is worse than no prompt.
+    notice(`PRESET_TOO_LONG: “${preset.label}” needs ${composed.overflow} more characters than the ${PROMPT_LIMIT.toLocaleString('en-US')}-character limit allows. Shorten your draft first; nothing was inserted.`);
+    return;
+  }
+  field.value = composed.text;
+  // The draft's own listeners (auto-grow, counter, link chips) run on a real input event, so the
+  // composer ends up in exactly the state it would be in if you had typed this yourself.
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  field.focus({ preventScroll: true });
+  field.setSelectionRange(field.value.length, field.value.length);
+  closePresetsDialog();
+  notice(`Inserted the “${preset.label}” prompt. Add your task, then press Send — nothing was sent.`);
+  render();
+}
+$('presets-chip').addEventListener('click', openPresetsDialog);
+$('presets-close').addEventListener('click', closePresetsDialog);
+$('presets-search').addEventListener('input', renderPresetList);
+$('presets-dialog').addEventListener('close', () => { $('presets-search').value = ''; render(); });
 
 async function refresh() {
   const selected = $('tabs').value, tabs = await rpc('LIST_TABS');
@@ -355,7 +616,7 @@ async function dismissPair(turnId, pair) {
   if (pair.skip?.offered) return;
   if (!await askConfirm('Skip here without choosing?', 'Arena is not showing a Skip button for this comparison, so nothing can be skipped on Arena itself. This only stops the panel waiting: nothing is clicked or sent, and “Which response do you prefer?” stays in the Arena tab. Arena may ask you to choose there before your next message.', 'Skip here', 'Keep waiting')) return;
   if (!pending || pending.id !== turnId || pending.live?.pair !== pair || pair.choice || pair.busy) return;
-  client?.cancel(pending.id); pending.status = 'cancelled'; pending = null;
+  client?.cancel(pending.id); releaseTurnAttachments(pending); pending.status = 'cancelled'; pending = null;
   pair.dismissed = true; pair.choiceState = 'Skipped here only. Nothing was sent to Arena; the question is still in the Arena tab.';
   state = client?.ready ? 'ready' : 'error';
   notice('Skipped in the panel only. Arena still shows its A/B question — choose or skip there if it blocks your next message.');
@@ -374,7 +635,7 @@ function answerQuestion(turnId, answer) {
 // Earlier turns are a read-only snapshot of the open conversation, kept above this panel's own turns.
 function receiveHistory(event) {
   if (!historyRequest || event.requestId !== historyRequest) return;
-  historyRequest = null;
+  clearHistoryRequest();
   if (event.type === 'HISTORY_ERROR') { notice(`${event.code}: ${event.message}`); return; }
   if (tab && event.url && !samePage(event.url, tab.url)) { notice('The Arena conversation changed while loading. Reconnect before loading its history.'); return; }
   const own = turns.filter(t => !t.imported);
@@ -406,28 +667,50 @@ const RECOVERY_DELAYS = [0, 2000, 5000, 15000, 30000, 60000];
 let recovery = { attempt: 0, timer: null, running: false };
 let awakeTab = null;
 function keepTabAwake(tabId, keep) {
-  // While connected, ask Chrome not to discard the Arena tab to save memory (it would reload later).
-  try { chrome.tabs.update(tabId, { autoDiscardable: !keep }).catch(() => {}); } catch { /* tab gone */ }
-  awakeTab = keep ? tabId : null;
+  if (keep) {
+    if (awakeTab !== null && awakeTab !== tabId) void awakeLease.release(awakeTab);
+    awakeTab = tabId; void awakeLease.acquire(tabId);
+  } else {
+    if (awakeTab === tabId) awakeTab = null;
+    void awakeLease.release(tabId);
+  }
 }
+function clearHistoryRequest() { clearTimeout(historyTimer); historyTimer = null; historyRequest = null; }
+function restoreUnsentDraft(turn) {
+  if (!turn) return;
+  if (!$('prompt').value) $('prompt').value = turn.prompt;
+  const restored = restoreTurnAttachments(turn);
+  if (!staged.length) {
+    for (const item of restored) {
+      if (item.type.startsWith('image/')) { try { item.url = URL.createObjectURL(item.file); } catch { /* preview only */ } }
+      staged.push(item);
+    }
+  }
+  renderAttachments(); renderPromptCount();
+}
+
 function stopRecovery() { clearTimeout(recovery.timer); recovery = { attempt: 0, timer: null, running: false }; }
 function scheduleRecovery(delay) {
   clearTimeout(recovery.timer);
   recovery.timer = setTimeout(recoverNow, delay ?? RECOVERY_DELAYS[Math.min(recovery.attempt, RECOVERY_DELAYS.length - 1)]);
 }
 function interrupt(turn, text) {
+  releaseTurnAttachments(turn);
   turn.status = 'error'; turn.code = 'CONNECTION_INTERRUPTED'; turn.outcomeText = text;
   if (pending === turn) pending = null;
 }
 function giveUp(message, turnText) {
+  if (awakeTab !== null) keepTabAwake(awakeTab, false);
   stopRecovery(); state = 'error';
   if (pending) interrupt(pending, turnText || 'The connection ended before the reply arrived. Read it in Arena; nothing was resent.');
   notice(message);
 }
 function connectionLost(event) {
+  clearHistoryRequest();
+  pickerAction = null; try { $('picker-dialog').close(); } catch { /* already closed */ }
   const old = client; client = null; old?.close();
   if (!tab || !event.wasReady) {
-    state = 'error'; if (pending) pending.status = 'error';
+    state = 'error'; if (pending) { pending.status = 'error'; releaseTurnAttachments(pending); };
     notice(`${event.code ? event.code + ': ' : ''}${event.message}`); return;
   }
   if (pending) {
@@ -463,7 +746,7 @@ async function recoverNow() {
     stopRecovery(); keepTabAwake(tab.id, true);
     if (pending?.resume) {
       pending.resume = false; pending.phase = ''; pending.resumed = true; state = 'waiting';
-      next.watch(pending.id, pending.prompt, pending.userMessageId, tab.url, !!pending.attachments?.length);
+      next.watch(pending.id, pending.prompt, pending.userMessageId, tab.url, !!pending.attachments?.length, pending.questionRowIds);
       notice('Reconnected to the Arena tab. Still tracking your message — nothing was resent.');
     } else { state = 'ready'; notice('Reconnected to the Arena tab automatically. Nothing was resent.'); }
   } catch (error) {
@@ -501,11 +784,16 @@ function receive(event) {
   }
 }
 function handleEvent(event) {
+  if (event.type === 'TRANSPORT_HEALTH') {
+    notice(event.responsive ? 'The Arena tab is responding again. Nothing was resent.' : 'TAB_NOT_RESPONDING: The Arena tab has not answered the connection heartbeat. Open it from Settings to wake it. Send is paused; nothing will be resent.');
+    render(); return;
+  }
   if (event.type === 'MODEL_INFO') { render(); if ($('model-dialog').open) renderModelList(); return; }
+  if (event.type === 'PICKER_STATE' || event.type === 'PICKER_ERROR') { receivePicker(event); render(); return; }
   if (event.type === 'BRIDGE_LOST') { connectionLost(event); render(); return; }
   if (event.type === 'WAITING') { notice(`${event.code}: ${event.message}`); render(); return; }
   if (event.type === 'ERROR' && !event.requestId) {
-    state = 'error'; if (pending) pending.status = 'error';
+    state = 'error'; if (pending) { pending.status = 'error'; releaseTurnAttachments(pending); };
     notice(`${event.code ? event.code + ': ' : ''}${event.message}`); render(); return;
   }
   if (event.type === 'HISTORY' || event.type === 'HISTORY_ERROR') { receiveHistory(event); render(); return; }
@@ -515,9 +803,11 @@ function handleEvent(event) {
     case 'REVIEW_HANDLING': state = 'sending'; turn.status = 'sending'; turn.phase = 'review'; notice('Closing Arena’s task-review panel to restore the composer. No Yes/No feedback is selected.'); break;
     case 'SENDING': state = 'sending'; turn.status = 'sending'; turn.phase = ''; break;
     case 'SENT_WORKING':
+      releaseTurnAttachments(turn);
       state = 'waiting'; turn.status = 'waiting'; turn.acceptedAt ||= Date.now(); turn.lastActivityAt = Date.now();
       notice(`Arena took your message (${event.evidence || 'it is working'}) but has not shown it in the conversation yet — normal while a new Agent chat starts up. Waiting with no time limit. To stop waiting: Settings → Stop tracking.`); break;
     case 'ACCEPTED':
+      releaseTurnAttachments(turn);
       state = 'waiting'; turn.status = 'waiting'; turn.userMessageId = event.userMessageId;
       turn.acceptedAt ||= Date.now(); turn.lastActivityAt = Date.now();
       notice('Arena accepted your message. Live updates and supported question cards appear below; the final reply stays separate.'); break;
@@ -526,6 +816,12 @@ function handleEvent(event) {
         if ((event.text || '') !== (turn.live?.text || '')) turn.textChangedAt = now;
         turn.lastActivityAt = now; turn.acceptedAt ||= now;
         turn.live = { text: event.text, rich: event.rich || null, tools: event.tools, questions: event.questions, interactionNotice: event.interactionNotice, thinking: event.thinking || null, generating: !!event.generating, pair: event.pair || null };
+        // v2.8.1: remember every row that ever held a card, so a reconnect after an answer can still
+        // tell the answered row (now plain text) from the new reply instead of stopping as ambiguous.
+        if (Array.isArray(event.questions)) {
+          const seen = event.questions.map(q => q.rowId).filter(Boolean);
+          if (seen.length) turn.questionRowIds = [...new Set([...(turn.questionRowIds || []), ...seen])].slice(-64);
+        }
         if (event.pair?.prompt && event.pair.ready && !turn.pairNoticed) { turn.pairNoticed = true; notice('Arena answered with two responses and asks which one to continue with. Choose below or in Arena — nothing is chosen for you.'); }
         turn.liveRevision = (turn.liveRevision || 0) + 1; }
       break;
@@ -543,8 +839,19 @@ function handleEvent(event) {
       if (turn.live?.pair) { turn.live.pair.choiceState = event.message; turn.live.pair.busy = false; turn.liveRevision = (turn.liveRevision || 0) + 1; }
       notice(event.message); break;
     case 'QUESTION_SENT': notice('Your answer was attempted once and Arena’s question changed. Continuing to track this task.'); break;
+    case 'BLOCKED':
+      // A transient security verification, not a failure: keep the turn alive and just say why it paused.
+      turn.securityHold = true; turn.lastActivityAt = Date.now();
+      state = 'waiting'; turn.status = 'waiting';
+      notice(`${event.code}: ${event.message} Tracking is paused, not stopped — it resumes on its own once the verification passes in Arena.`);
+      break;
+    case 'SECURITY_CLEARED':
+      turn.securityHold = false; turn.lastActivityAt = Date.now();
+      notice('The Arena verification passed. Tracking resumed automatically; nothing was resent.');
+      break;
     case 'URL_BOUND': tab.url = event.url; break;
     case 'COMPLETE':
+      releaseTurnAttachments(turn);
       turn.reply = event.text; turn.rich = Array.isArray(event.rich) ? event.rich : null; turn.status = 'complete'; turn.userMessageId = event.userMessageId; turn.assistantMessageId = event.assistantMessageId;
       turn.model = typeof event.model === 'string' ? event.model.slice(0, 120) : '';
       turn.choice = ['a', 'b', 'skip'].includes(event.choice) ? event.choice : '';
@@ -556,29 +863,19 @@ function handleEvent(event) {
       if (turn.resumed && client?.ready) {
         // Re-watching after a reconnect failed (e.g. the message is gone after a reload). The
         // connection itself is fine, so finish this turn and keep the chat usable. Nothing is resent.
+        releaseTurnAttachments(turn);
         turn.status = 'error'; turn.code = event.code; turn.outcomeText = `${event.message}`; pending = null; state = 'ready';
         notice(`${event.code}: ${event.message}`); break;
       }
       state = 'error'; turn.status = 'error'; turn.code = event.code;
-      // Nothing was clicked in the page: hand the exact File objects back to the panel composer.
-      if (turn.payload?.length && !event.clicked && !staged.length) {
-        for (const [index, meta] of turn.payload.entries()) {
-          const file = turn.files?.[index];
-          if (!(file instanceof File)) continue;
-          staged.push({ name: meta.name, type: meta.type, size: file.size, file });
-          if (meta.type.startsWith('image/')) { try { staged.at(-1).url = URL.createObjectURL(file); } catch { /* preview only */ } }
-        }
-        turn.payload = null; turn.files = null; renderAttachments();
-        if (!$('prompt').value) $('prompt').value = turn.prompt; // nothing reached Arena's Send, so keep the draft together
-        notice(`${event.code}: ${event.message} Your staged files were returned to this composer.`);
-      }
+      if (!event.clicked) restoreUnsentDraft(turn); else releaseTurnAttachments(turn);
       notice(turn.resumed ? `${event.code}: ${event.message}` : `${event.code}: ${event.message} ${event.clicked ? 'Send was attempted once. Check Arena before resending.' : 'No Send click was attempted for this request. Text may remain in the Arena composer.'}`); break;
   }
   render();
 }
 async function connect(id) {
   const version = ++epoch;
-  closeClient(); state = 'connecting'; render();
+  clearHistoryRequest(); closeClient(); state = 'connecting'; render();
   const selected = await rpc('GET_TAB', { tabId: id });
   if (epoch !== version) return;
   if (!isArena(selected.url) || isDirect(selected.url)) throw new Error('Battle and Side-by-Side are not supported. Open Agent Mode or a Direct (one model) chat. It will not fall back to manual copying.');
@@ -591,25 +888,50 @@ async function connect(id) {
   state = 'ready'; $('connection-details').open = false; setSheet(false); keepTabAwake(selected.id, true);
   notice('Connected. Send a message below — replies appear right here.');
 }
-function action(id, fn) {
-  $(id).addEventListener('click', async () => {
-    if (busy) return;
-    busy = true; notice(); render(); const version = epoch;
+function action(id, fn) { $(id).addEventListener('click', () => runAction(fn)); }
+// One action wrapper, shared by every control that runs an action: the sheet's buttons and the
+// toolbar reconnect button. Keeping it here (rather than clicking a sheet button, which sits inside
+// the inert sheet and would not fire in a real browser) means one flow, one busy/actionId guard.
+function runAction(fn) {
+  if (busy || switching) return;
+  // A coded error stays until the user minimizes it (see noticeKind/setNoticeOpen above): an action
+  // click must not wipe the message the user is still reading. Anything else makes way for the result.
+  busy = true; if ($('notice').dataset.kind !== 'error') notice(); render(); const operation = ++actionId;
+  (async () => {
     try { await fn(); }
     catch (error) {
       // Never convert a failure into manual mode or request pasted replies.
-      if (tab || version === epoch || id === 'connect') {
+      if (operation === actionId) {
         if (pending || !client?.ready) state = 'error'; if (pending) pending.status = 'error'; notice(error.message || 'Unexpected extension error. Check Arena before resending.');
       }
-    } finally { busy = false; render(); }
-  });
+    } finally { if (operation === actionId) { busy = false; render(); } }
+  })();
 }
+$('connection-cancel').addEventListener('click', () => {
+  if (!['connecting', 'reconnecting'].includes(state)) return;
+  actionId++; epoch++; closeClient(); stopRecovery(); clearHistoryRequest(); cancelScreenshot();
+  if (awakeTab !== null) keepTabAwake(awakeTab, false);
+  if (pending) interrupt(pending, 'Connection setup cancelled. Nothing was resent; check Arena for any accepted message.');
+  busy = false; switching = false; state = tab ? 'error' : 'disconnected';
+  notice('Connection setup cancelled. Your local draft and history are kept.'); render();
+});
+$('connection-focus').addEventListener('click', () => {
+  if (tab) rpc('FOCUS_TAB', { tabId: tab.id }).catch(error => notice(error.message));
+});
+$('accept-current-model').addEventListener('click', async () => {
+  if (!requestedModel || !client?.ready || !client.model || busy || switching) return;
+  const version = epoch, model = client.model;
+  if (await askConfirm('Use Arena’s current model?', `You requested “${requestedModel}”. Send future messages using “${model}” instead?`, 'Use this model', 'Cancel')) {
+    if (epoch === version && client?.ready && client.model === model) { requestedModel = ''; notice(`Model confirmed: ${model}. Nothing was sent.`); render(); }
+  }
+});
 for (const id of ['tabs', 'confirmed', 'authorize']) $(id).addEventListener('change', render);
 $('load-history').addEventListener('click', () => {
   if ($('load-history').disabled || !client?.ready || !tab) return;
   historyRequest = crypto.randomUUID();
+  historyTimer = setTimeout(() => { clearHistoryRequest(); notice('HISTORY_TIMEOUT: Earlier messages did not arrive. Open Arena or try the read-only history request again.'); render(); }, 15000);
   try { client.loadHistory(historyRequest, tab.url); }
-  catch (error) { historyRequest = null; notice(error.message); }
+  catch (error) { clearHistoryRequest(); notice(error.message); }
   render();
 });
 action('refresh', refresh);
@@ -628,56 +950,81 @@ action('disconnect', async () => {
   if (!await askClear('Disconnect and clear this panel? Any request already accepted by Arena may continue there.')) return;
   clear(); await refresh(); notice('Disconnected. The local session was cleared; Arena history is unchanged.');
 });
-action('reconnect', async () => {
-  if (!await askClear('Reconnect and clear this local session? Check Arena before resending any accepted prompt.')) return;
-  const id = tab?.id; clear();
-  if (!Number.isInteger(id)) return;
-  notice('Session cleared. Check the selected Arena tab and tick the confirmations again, then connect.');
-  await refresh(); $('tabs').value = String(id);
-});
+// The one reconnect flow: Settings → Reconnect and the toolbar reconnect button both run it through
+// runAction, so the same-conversation confirmations and the "nothing is resent" guarantees are shared
+// rather than re-implemented per control.
+const reconnect = async () => {
+  if (!tab) return;
+  const id = tab.id, expectedUrl = tab.url, operation = actionId;
+  const current = await rpc('GET_TAB', { tabId: id });
+  if (operation !== actionId) return;
+  if (!samePage(current.url, expectedUrl)) {
+    if (!await askClear('Arena is on a different conversation. Clear this local session and choose that tab again? Nothing will be resent.')) return;
+    clear(); await refresh(); $('tabs').value = String(id);
+    notice('Choose the current conversation and confirm it before connecting.'); return;
+  }
+  if (pending && !await askConfirm('Reattach without resending?', 'Your current request may continue in Arena. Only an already-verified message can be tracked again; nothing will be resent. Your local chat and draft stay here.', 'Reattach', 'Cancel')) return;
+  if (operation !== actionId) return;
+  const tracked = pending?.userMessageId ? pending : null;
+  if (pending && !tracked) interrupt(pending, 'Tracking interrupted before message acceptance could be verified. Check Arena; nothing was resent.');
+  cancelScreenshot();
+  await connect(id);
+  if (operation !== actionId || !client?.ready) return;
+  if (tracked) {
+    pending = tracked; tracked.status = 'waiting'; tracked.resumed = true; state = 'waiting';
+    client.watch(tracked.id, tracked.prompt, tracked.userMessageId, tab.url, !!tracked.attachments?.length, tracked.questionRowIds);
+  }
+  notice('Reattached to the same conversation. Your local chat and draft are kept; nothing was resent.');
+};
+action('reconnect', reconnect);
+// Toolbar reconnect: offered exactly when a reconnect is possible (stopped on a known tab, idle).
+$('reconnect-button').addEventListener('click', () => { if (canReconnect()) runAction(reconnect); });
+
 action('prepare', async () => {
+  if (shotOperation || requestedModel || switching) throw new Error('Finish or cancel the screenshot and confirm the selected model before sending.');
   if (state !== 'ready' || !client?.ready || pending || !tab) throw new Error('Connect and verify the Agent controls before sending.');
+  const capability = capabilitySummary(client.capabilities);
+  if (capability.drift) throw new Error(`The Arena page no longer matches this adapter (missing: ${capability.required.join(', ')}). Verify the Arena tab and update/reload the extension before sending. No prompt was sent.`);
   const text = $('prompt').value.trim();
   if (!text || text.length > 30000) throw new Error('Enter a message of 1–30,000 characters with any attachments.');
   if (staged.length && !client?.ready) throw new Error('Connect and verify the Arena tab before sending staged files.');
   if (staged.length && client?.uploadKind !== 'input') throw new Error(client?.uploadKind === 'unsupported' ? 'The Arena composer file input restricts file types or is ambiguous, so staged files cannot be placed there. Attach them in the Arena tab; nothing was sent.' : 'The connected Arena tab does not expose a usable composer file input, so staged files cannot be sent. Remove them here or attach them in the Arena tab; nothing was sent.');
-  const files = staged.map(item => item.file), payload = [];
-  for (const item of staged) {
-    const buffer = await item.file.arrayBuffer();
-    if (!buffer.byteLength || buffer.byteLength > ATTACHMENT_POLICY.maxBytes) throw new Error(`"${item.name}" could not be read within the size limit. Nothing was sent.`);
-    payload.push({ name: item.name, type: item.type, data: bytesToBase64(new Uint8Array(buffer)) });
-  }
-  const version = epoch, current = await rpc('GET_TAB', { tabId: tab.id });
-  if (version !== epoch) return;
-  if (!samePage(current.url, tab.url)) { closeClient(); throw new Error('The Arena URL changed. Reconnect to verify the current Arena conversation.'); }
-  tab.url = current.url; // Arena may rewrite ?model_a= on an empty Direct chat; same page.
-  const turn = { id: crypto.randomUUID(), mode: client?.pageKind === 'direct' ? 'direct' : 'agent', prompt: text, reply: '', status: 'sending', attachments: staged.map(({ name, size, type }) => ({ name, size, type })), payload, files };
-  turns.push(turn); pending = turn; state = 'sending'; $('prompt').value = ''; promptCut = 0; renderPromptCount();
-  for (const item of staged.splice(0)) if (item.url) URL.revokeObjectURL(item.url);
-  renderAttachments();
-  await client.send(turn.id, turn.prompt, tab.url, turn.payload);
-  notice(turn.attachments.length ? `Submitting your message and ${turn.attachments.length} staged file${turn.attachments.length > 1 ? 's' : ''} through Arena’s visible controls.` : 'Submitting through Arena’s visible controls. No copy/paste action is required.');
+  const version = epoch, connection = client, selectedTab = tab, snapshot = staged.slice();
+  const files = snapshot.map(item => item.file), payload = [];
+  try {
+    for (const item of snapshot) {
+      const buffer = await withTimeout(item.file.arrayBuffer(), 10000, 'File reading timed out. Nothing was sent.');
+      if (version !== epoch || client !== connection) return;
+      if (!buffer.byteLength || buffer.byteLength > ATTACHMENT_POLICY.maxBytes) throw new Error(`"${item.name}" could not be read within the size limit. Nothing was sent.`);
+      payload.push({ name: item.name, type: item.type, data: bytesToBase64(new Uint8Array(buffer)) });
+    }
+    const current = await rpc('GET_TAB', { tabId: selectedTab.id });
+    if (version !== epoch || client !== connection) return;
+    if (!samePage(current.url, tab.url)) { closeClient(); throw new Error('The Arena URL changed. Reconnect to verify the current Arena conversation.'); }
+    tab.url = current.url; // Arena may rewrite ?model_a= on an empty Direct chat; same page.
+    const turn = { id: crypto.randomUUID(), mode: client?.pageKind === 'direct' ? 'direct' : 'agent', prompt: text, reply: '', status: 'sending', attachments: snapshot.map(({ name, size, type }) => ({ name, size, type })), files };
+    turns.push(turn); pending = turn; state = 'sending'; $('prompt').value = ''; promptCut = 0; renderPromptCount();
+    for (const item of staged.splice(0)) if (item.url) URL.revokeObjectURL(item.url);
+    renderAttachments();
+    try { await connection.send(turn.id, turn.prompt, tab.url, payload); }
+    catch (error) { if (version === epoch && pending === turn) restoreUnsentDraft(turn); else releaseTurnAttachments(turn); throw error; }
+    if (version !== epoch || client !== connection) return;
+    notice(turn.attachments.length ? `Submitting your message and ${turn.attachments.length} staged file${turn.attachments.length > 1 ? 's' : ''} through Arena’s visible controls.` : 'Submitting through Arena’s visible controls. No copy/paste action is required.');
+  } finally { for (const item of payload) item.data = ''; payload.length = 0; }
 });
 function formatName(name) { const text = String(name); return text.length > 34 ? `${text.slice(0, 14)}…${text.slice(-16)}` : text; }
 function stageFiles(list, origin) {
-  const files = [...(list || [])];
-  if (!files.length) return false;
-  const room = ATTACHMENT_POLICY.maxFiles - staged.length;
-  if (room <= 0) { $('attachment-status').textContent = `Only ${ATTACHMENT_POLICY.maxFiles} files fit in one message.`; return true; }
-  const { accepted, rejected } = validateAttachments(files.slice(0, room));
-  for (const meta of accepted) {
-    // The validated metadata must be matched back to the exact File object it came from. Falling back to
-    // another entry (for example when the browser reported no MIME type) would silently stage and send a
-    // different file than the one the checks above approved.
-    const file = files.find(item => String(item.name || '').trim() === meta.name && item.size === meta.size && (item.type === meta.type || !item.type));
-    if (!file) { $('attachment-status').textContent = `“${formatName(meta.name)}” could not be matched to the file you chose and was not staged.`; continue; }
-    staged.push({ ...meta, file });
-    if (meta.type.startsWith('image/')) { const item = staged.at(-1); try { item.url = URL.createObjectURL(file); } catch { /* preview only */ } }
+  if (busy || pending || state !== 'ready' || !client?.ready) return false;
+  const { accepted, rejected } = selectAttachments(list, ATTACHMENT_POLICY.maxFiles - staged.length);
+  for (const item of accepted) {
+    if (item.type.startsWith('image/')) { try { item.url = URL.createObjectURL(item.file); } catch { /* preview only */ } }
+    staged.push(item);
   }
-  $('attachment-status').textContent = rejected.length ? `Skipped ${rejected.length}: ${rejected[0].reason}` : '';
+  $('attachment-status').textContent = rejected.map(item => `“${formatName(item.name)}”: ${item.reason}`).join(' ');
   renderAttachments(); render();
-  return true;
+  return accepted.length > 0;
 }
+
 function renderAttachments() {
   const chips = $('attachment-chips');
   chips.replaceChildren(...staged.map((item, index) => {
@@ -693,10 +1040,10 @@ function renderAttachments() {
     label.textContent = `${formatName(item.name)} · ${formatBytes(item.size)}`; label.title = item.name;
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'attachment-remove';
     remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${item.name}`);
-    remove.onclick = () => { const [gone] = staged.splice(index, 1); if (gone?.url) URL.revokeObjectURL(gone.url); $('attachment-status').textContent = ''; renderAttachments(); render(); };
+    remove.onclick = () => { if (busy || pending) return; const [gone] = staged.splice(index, 1); if (gone?.url) URL.revokeObjectURL(gone.url); $('attachment-status').textContent = ''; renderAttachments(); render(); };
     chip.append(label, remove); return chip;
   }));
-  $('attachments').hidden = !staged.length;
+  $('attachments').hidden = !staged.length && !$('attachment-status').textContent;
 }
 // ---------- Link screenshots (v2.6.0) ----------
 // A chip per link found in the draft. Nothing is opened or captured unless the user clicks a chip.
@@ -706,9 +1053,13 @@ async function refreshShotAccess() {
   $('shot-access-remove').disabled = !shotAccess;
 }
 chrome.permissions?.onAdded?.addListener(() => refreshShotAccess());
-chrome.permissions?.onRemoved?.addListener(() => refreshShotAccess());
+chrome.permissions?.onRemoved?.addListener(async () => {
+  await refreshShotAccess();
+  if (!shotAccess && shotOperation) { cancelScreenshot('Screenshot cancelled because website access was removed.'); render(); }
+});
 refreshShotAccess();
 $('shot-access-remove').addEventListener('click', async () => {
+  cancelScreenshot('Screenshot cancelled because website access was removed.'); render();
   await removeShotAccess(); await refreshShotAccess();
   notice(shotAccess ? 'Chrome kept website access; remove it at chrome://extensions if needed.' : 'Website access for link screenshots was removed. Chrome will ask again next time.');
 });
@@ -722,7 +1073,7 @@ function cameraIcon() {
 }
 function setShotStatus(text) { $('shot-status').textContent = text; shotSignature = ''; renderShotChips(); }
 function renderShotChips() {
-  const links = findLinks($('prompt').value).filter(href => !shotDone.has(href) || shotBusy === href);
+  const links = findLinks($('prompt').value).filter(href => !staged.some(item => item.sourceUrl === href) || shotBusy === href);
   const full = staged.length >= ATTACHMENT_POLICY.maxFiles, locked = $('prompt').disabled;
   const signature = JSON.stringify([links, shotBusy, shotProgress, full, locked, $('shot-status').textContent]);
   if (signature === shotSignature) return;
@@ -741,42 +1092,60 @@ function renderShotChips() {
     chip.addEventListener('click', () => { if (!chip.disabled) screenshotLink(href); });
     return chip;
   }));
-  $('link-shots').hidden = !links.length && !$('shot-status').textContent;
+  $('cancel-shot').hidden = !shotOperation;
+  $('link-shots').hidden = !links.length && !$('shot-status').textContent && !shotOperation;
 }
 const SHOT_STEPS = { opening: 'Opening page…', loading: 'Loading page…', stitching: 'Putting the screenshot together…' };
+function cancelScreenshot(message = '') {
+  const operation = shotOperation; shotOperation = null;
+  operation?.controller.abort();
+  shotBusy = ''; shotProgress = ''; shotSignature = '';
+  if (message) setShotStatus(message);
+}
+$('cancel-shot').addEventListener('click', () => { cancelScreenshot('Screenshot cancelled. Nothing was attached.'); render(); });
 async function screenshotLink(href) {
-  if (shotBusy) return;
+  if (shotOperation || busy || pending || state !== 'ready') return;
   if (staged.length >= ATTACHMENT_POLICY.maxFiles) { setShotStatus(`Only ${ATTACHMENT_POLICY.maxFiles} files fit in one message.`); return; }
-  if (!shotAccess) {
-    const ok = await askConfirm('Allow link screenshots?', 'Chrome will ask you to let Arena Auto Chat “read and change all your data on all websites”. It is only used when you click a screenshot chip: the link opens in a small window, is captured and closed. Pages open with your normal sign-ins, so check the screenshot before you send. You can remove this access in Settings at any time.', 'Continue', 'Not now');
-    if (!ok) { setShotStatus('No screenshot was taken; website access was not requested.'); return; }
-    // Still inside the user's click on Continue, as Chrome requires for permission prompts.
-    await requestShotAccess(); await refreshShotAccess();
-    if (!shotAccess) { setShotStatus('Chrome did not grant website access, so no screenshot was taken.'); return; }
-  }
-  shotBusy = href; shotProgress = SHOT_STEPS.opening; setShotStatus('');
+  const operation = { controller: new AbortController(), epoch, draft: $('prompt').value };
+  shotOperation = operation; shotBusy = href; shotProgress = SHOT_STEPS.opening; render();
+  const current = () => shotOperation === operation && epoch === operation.epoch &&
+    $('prompt').value === operation.draft && !operation.controller.signal.aborted;
   try {
-    const result = await captureLink(href, { onProgress: step => {
+    if (!shotAccess) {
+      const ok = await askConfirm('Allow link screenshots?', 'Chrome will ask you to let Arena Auto Chat “read and change all your data on all websites”. It is only used when you click a screenshot chip. Pages open with your normal sign-ins, so check the screenshot before you send. You can remove this access in Settings.', 'Continue', 'Not now');
+      if (!current()) return;
+      if (!ok) { setShotStatus('No screenshot was taken; website access was not requested.'); return; }
+      await requestShotAccess(); await refreshShotAccess();
+      if (!current()) return;
+      if (!shotAccess) { setShotStatus('Chrome did not grant website access, so no screenshot was taken.'); return; }
+    }
+    setShotStatus('');
+    const result = await captureLink(href, { signal: operation.controller.signal, onProgress: step => {
+      if (!current()) return;
       shotProgress = step.phase === 'capturing' ? `Capturing ${step.part} of ${step.parts}…` : SHOT_STEPS[step.phase] || shotProgress;
       renderShotChips();
     } });
+    if (!current() || busy || pending || state !== 'ready') return;
     const before = staged.length;
     stageFiles([result.file], 'screenshot');
     if (staged.length > before) {
-      shotDone.add(href);
-      setShotStatus(`Attached a ${result.truncated ? 'partial (top of the page) ' : 'full-page '}screenshot of ${hostLabel(href)}${result.title ? ` — “${result.title}”` : ''}. Click its thumbnail to check it before you send.`);
+      staged.at(-1).sourceUrl = href;
+      setShotStatus(`Attached a ${result.truncated ? 'partial (top of the page) ' : 'full-page '}screenshot of ${hostLabel(result.url)}${result.url !== href ? ` (redirected from ${hostLabel(href)})` : ''}${result.title ? ` — “${result.title}”` : ''}. Click its thumbnail to check it before you send.`);
     } else setShotStatus('The screenshot could not be attached (see the attachment note).');
   } catch (error) {
-    setShotStatus(error?.code ? `${error.code}: ${error.message}` : `The screenshot failed (${error?.message || 'unknown error'}). Nothing was attached.`);
-  } finally { shotBusy = ''; shotProgress = ''; shotSignature = ''; renderShotChips(); }
+    if (current()) setShotStatus(error?.code ? `${error.code}: ${error.message}` : `The screenshot failed (${error?.message || 'unknown error'}). Nothing was attached.`);
+  } finally {
+    if (shotOperation === operation) { shotOperation = null; shotBusy = ''; shotProgress = ''; shotSignature = ''; render(); }
+  }
 }
+
 $('attach-files').addEventListener('click', () => { if (!$('attach-files').disabled) $('attachment-input').click(); });
 $('attachment-input').addEventListener('change', () => { stageFiles($('attachment-input').files, 'picker'); $('attachment-input').value = ''; });
 $('prompt').addEventListener('paste', event => {
   const list = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file' && item.type.startsWith('image/'))
     .map(item => item.getAsFile()).filter(Boolean);
   // Only intercept pasted images; text pastes must reach the caret untouched.
-  if (list.length) { event.preventDefault(); if (stageFiles(list, 'paste')) $('attachment-status').textContent = ''; }
+  if (list.length) { event.preventDefault(); stageFiles(list, 'paste'); }
 });
 const composer = document.querySelector('.arena-composer');
 composer.addEventListener('dragover', event => { if (event.dataTransfer?.types?.includes('Files')) { event.preventDefault(); composer.dataset.dragging = 'true'; } });
@@ -802,12 +1171,12 @@ $('prompt').addEventListener('keydown', event => {
 action('cancel', async () => {
   if (!pending) return;
   if (!await askClear('Stop tracking this turn? This does not stop generation in Arena. Check the tab before another send.')) return;
-  client?.cancel(pending.id); pending.status = 'cancelled'; pending = null;
+  client?.cancel(pending.id); releaseTurnAttachments(pending); pending.status = 'cancelled'; pending = null;
   state = client?.ready ? 'ready' : 'error';
   notice('Local tracking stopped. Nothing was retried. Check Arena before sending another message.');
 });
 chrome.tabs.onRemoved.addListener(id => {
-  if (tab?.id === id) { closeDialog(false); clear(); notice('The connected Arena tab closed. This session was cleared.'); }
+  if (tab?.id === id) { actionId++; busy = false; closeDialog(false); clear(); notice('The connected Arena tab closed. This session was cleared.'); }
   refresh().catch(error => notice(error.message));
 });
 chrome.tabs.onUpdated.addListener((id, change) => {
@@ -815,11 +1184,11 @@ chrome.tabs.onUpdated.addListener((id, change) => {
   // A reload of the same page is handled by the automatic reattach above (history is kept).
   // Moving to a different page stops the connection but keeps this chat visible until you reconnect.
   if (change.url && !samePage(change.url, tab.url) && (client || state === 'reconnecting') && !switching) {
-    const old = client; client = null; old?.close(); stopRecovery(); state = 'error';
+    const old = client; client = null; old?.close(); stopRecovery(); if (awakeTab !== null) keepTabAwake(awakeTab, false); state = 'error';
     notice('The Arena tab moved to a different page. Your chat here is kept; open Settings → Reconnect to connect to the page now shown in Arena.');
     render();
   }
 });
 // Minimizing, covering or switching tabs keeps the session; closing the panel/window ends it (the port closes with the page).
-window.addEventListener('pagehide', () => { closeDialog(false); clear(); });
+window.addEventListener('pagehide', () => { actionId++; closeDialog(false); clear(); });
 refresh().catch(error => { state = 'error'; notice(error.message); render(); });

@@ -11,7 +11,7 @@ import { renderRich } from '../rich-view.js';
 // state toggles the motion layer hangs off - hidden on the reply block, on the outcome note, on the jump
 // button - are asserted directly instead of being taken on trust.
 const panelHtml = readFileSync(new URL('../panel.html', import.meta.url), 'utf8');
-// The body tag carries attributes (<body data-sheet="open">), so match the tag rather than a literal
+// The body tag carries attributes (data-connected, and data-sheet once script runs), so match the tag rather than a literal
 // string; a silent miss here would make this whole file test a copy of the head instead of the panel.
 const body = panelHtml.replace(/^[\s\S]*?<body[^>]*>/i, '').replace(/<\/body>[\s\S]*$/i, '').replace(/<script[\s\S]*?<\/script>/g, '');
 assert.ok(body.includes('id="prepare"') && !/<(?:html|head|body)\b/i.test(body), 'panel.html could not be split into head and body');

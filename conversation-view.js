@@ -1,6 +1,16 @@
 import { LiveView } from './live-view.js';
 import { renderRich, richToMarkdown } from './rich-view.js';
 import { copyText } from './copy.js';
+// What a finished-but-not-answered turn says for itself. `imported-*` states come from the read-only
+// history import, where the page held something other than one clear reply.
+const OUTCOMES = {
+  cancelled: 'Tracking stopped in this panel. The Arena task may continue.',
+  error: 'No reply captured. Check the Arena tab.',
+  'imported-no-reply': 'No reply text is on the page for this message (it may have been only tool activity or a question). Read it in Arena.',
+  'imported-ambiguous': 'Several separate replies are on the page for this message, so none was picked. Read it in Arena.',
+  'imported-pair': 'Arena answered this message with two responses (Battle in Direct). Read which one continued in Arena.',
+  'imported-unreadable': 'This message’s text could not be read from the page.'
+};
 // Presentation only: no tab, transport, credential, or storage access.
 export class ConversationView {
   constructor(doc = document, onAnswer = () => {}, onChoose = () => {}) {
@@ -27,9 +37,18 @@ export class ConversationView {
     // The toolbar and composer float over the chat as glass; their heights pad the scroller.
     const root = doc.documentElement, toolbar = doc.getElementById('toolbar'), dock = doc.querySelector('.composer-dock');
     this.layoutResize = new ResizeObserver(() => {
-      const top = `${Math.ceil(toolbar.getBoundingClientRect().height)}px`, bottom = `${Math.ceil(dock.getBoundingClientRect().height)}px`;
-      if (root.style.getPropertyValue('--toolbar-h') !== top) root.style.setProperty('--toolbar-h', top);
-      if (root.style.getPropertyValue('--composer-h') !== bottom) root.style.setProperty('--composer-h', bottom);
+      // A 0-height frame (first paint, or a display:none ancestor) must not collapse the insets to 0
+      // and hide the transcript under the toolbar. The dock includes the mode row, so its border box
+      // is the whole stack the transcript has to clear — chips are in flow, not floating over it.
+      const apply = (node, name) => {
+        if (!node) return;
+        const height = Math.ceil(node.getBoundingClientRect().height);
+        if (height <= 0) return;
+        const value = `${height}px`;
+        if (root.style.getPropertyValue(name) !== value) root.style.setProperty(name, value);
+      };
+      apply(toolbar, '--toolbar-h');
+      apply(dock, '--composer-h');
       if (this.following) this.toBottom(); else this.updateJump();
     });
     for (const node of [toolbar, dock]) if (node) this.layoutResize.observe(node);
@@ -113,11 +132,9 @@ export class ConversationView {
       if (!turn.reply && item.assistant.isConnected) item.assistant.remove();
       if (item.status !== turn.status) {
         item.article.dataset.state = turn.status;
-        const outcome = turn.outcomeText ? turn.outcomeText : turn.status === 'cancelled' ? 'Tracking stopped in this panel. The Arena task may continue.' : turn.status === 'error' && pending?.id !== turn.id ? 'No reply captured. Check the Arena tab.'
-          : turn.status === 'imported-no-reply' ? 'No reply text is on the page for this message (it may have been only tool activity or a question). Read it in Arena.'
-          : turn.status === 'imported-ambiguous' ? 'Several separate replies are on the page for this message, so none was picked. Read it in Arena.'
-          : turn.status === 'imported-pair' ? 'Arena answered this message with two responses (Battle in Direct). Read which one continued in Arena.'
-          : turn.status === 'imported-unreadable' ? 'This message’s text could not be read from the page.' : '';
+        // One wording per state, in one table: an explicit reason wins, and a live error explains itself
+        // in the pending card above rather than repeating here.
+        const outcome = turn.outcomeText || (turn.status === 'error' && pending?.id === turn.id ? '' : OUTCOMES[turn.status]) || '';
         item.outcome.textContent = outcome; item.outcome.hidden = !outcome;
         item.status = turn.status;
       }

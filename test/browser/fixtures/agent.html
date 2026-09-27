@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Local Agent fixture</title></head>
+<body>
+<!-- Synthetic, public test content only. This fixture is not a claim about current live Arena markup. -->
+<main><ol id="transcript"></ol><form id="composer">
+<label for="message">Message</label><textarea id="message" placeholder="Message Arena"></textarea>
+<input id="files" type="file" accept="text/plain,text/javascript,application/javascript" multiple>
+<button id="send" type="button" aria-label="Send message">Send</button>
+</form></main>
+<script>
+window.sendClicks = 0;
+window.uploadedFiles = [];
+const files = document.getElementById('files');
+files.addEventListener('change', async () => {
+  window.uploadedFiles = await Promise.all([...files.files].map(async file => ({ name: file.name, text: await file.text(), type: file.type })));
+});
+document.getElementById('send').addEventListener('click', () => {
+  window.sendClicks++;
+  const prompt = document.getElementById('message').value;
+  const row = (id, text, user) => {
+    const item = document.createElement('li');
+    item.setAttribute('data-agent-transcript-message', 'true'); item.setAttribute('data-chat-message-id', id);
+    const prose = document.createElement('div'); prose.className = 'prose'; prose.textContent = text;
+    if (user) prose.setAttribute('data-user-message-layout', 'true');
+    item.append(prose);
+    if (!user) { const done = document.createElement('span'); done.setAttribute('aria-label', 'Response ended'); done.textContent = 'Done'; item.append(done); }
+    document.getElementById('transcript').append(item);
+  };
+  row(`user-${window.sendClicks}`, prompt, true);
+  row(`reply-${window.sendClicks}`, 'Fixture reply: received once.', false);
+  document.getElementById('message').value = '';
+});
+</script></body></html>

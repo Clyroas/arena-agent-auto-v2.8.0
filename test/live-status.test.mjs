@@ -65,6 +65,18 @@ test('activity, tools and finished steps are summarized from what Arena shows', 
   assert.match(done.detail, /Thought for 4s/);
 });
 
+test('a security verification pauses the status instead of reporting a stop', () => {
+  const held = liveStatus(turn({ securityHold: true }), NOW);
+  assert.equal(held.step, 'Waiting for verification');
+  assert.equal(held.kind, 'blocked');
+  assert.match(held.detail, /resumes on its own/i);
+  // It must outrank the ordinary "working" summaries while held.
+  const alsoLive = liveStatus(turn({ securityHold: true, live: { text: 'Streaming along.', generating: true }, textChangedAt: NOW - 500 }), NOW);
+  assert.equal(alsoLive.kind, 'blocked');
+  // A genuine error is still reported as a stop.
+  assert.equal(liveStatus(turn({ securityHold: true, status: 'error' }), NOW).kind, 'error');
+});
+
 test('while nothing visible has happened the panel says so and keeps waiting', () => {
   const idle = liveStatus(turn({ live: { generating: true } }), NOW);
   assert.equal(idle.step, 'Working');

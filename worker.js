@@ -22,7 +22,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   pruneGrants();
   const key = `${tabId}:${documentId}`;
   if (!stageGrants.has(key)) return deny('STAGE_UNBOUND', 'No pending staged-file send is attached to this Arena document. Nothing was inserted.');
+  const grantExpiry = stageGrants.get(key);
   stageGrants.delete(key); // single use: another attempt needs a fresh explicit Send
+  if (!Number.isFinite(message.expiresAt) || message.expiresAt <= Date.now())
+    return deny('STAGE_EXPIRED', 'The staged-file request expired. Nothing was inserted.');
+  const expiresAt = Math.min(message.expiresAt, grantExpiry);
   const files = Array.isArray(message.files) ? message.files : [];
   if (!files.length || files.length > 4 || files.some(file => typeof file?.name !== 'string' || typeof file?.type !== 'string' ||
       typeof file?.data !== 'string' || file.data.length > 12e6) || !/^[0-9a-f-]{36}$/.test(String(message.token || '')))
@@ -30,7 +34,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   (async () => {
     const results = await chrome.scripting.executeScript({
       target: { tabId, documentIds: [documentId] }, world: 'MAIN',
-      func: arenaAgentStageFiles, args: [{ token: message.token, files }]
+      func: arenaAgentStageFiles, args: [{ token: message.token, expiresAt, files }]
     });
     return { ok: true, value: results?.find(entry => entry.frameId === 0)?.result ?? null };
   })().then(result => respond(result), error => respond({ ok: false, code: 'STAGE_FAILED', error: error?.message || 'Chrome could not run the staging step. Nothing was inserted.' }));
@@ -94,7 +98,48 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         if (!allowed) throw new Error('Only a new Arena Direct chat or Agent Mode can be opened from the panel.');
         const tab = await chrome.tabs.get(message.tabId);
         if (!isArena(tab.url)) throw new Error('This tab is no longer on Arena.');
-        await chrome.tabs.update(tab.id, { url: target });
+        // Snapshot the current window and active tab so the user's prior view can be restored after loading.
+        const lastFocused = typeof chrome.windows?.getLastFocused === 'function'
+          ? await chrome.windows.getLastFocused().catch(() => null)
+          : null;
+        let previousNormalWindowId = null;
+        if (lastFocused?.type === 'popup' && typeof chrome.windows?.getLastFocused === 'function') {
+          const normalWin = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+          if (normalWin && normalWin.id !== tab.windowId) previousNormalWindowId = normalWin.id;
+        }
+        const win = await chrome.windows.get(tab.windowId);
+        const wasMinimized = win.state === 'minimized';
+        const [activeTab] = typeof chrome.tabs?.query === 'function'
+          ? await chrome.tabs.query({ windowId: tab.windowId, active: true }).catch(() => [])
+          : [];
+        const previousTabId = activeTab && activeTab.id !== tab.id ? activeTab.id : null;
+        // Foreground only this explicit switch: background pages can defer hydration until
+        // visible, leaving the panel stuck checking controls until the user clicks the tab.
+        await chrome.windows.update(tab.windowId, { focused: true, ...(wasMinimized ? { state: 'normal' } : {}) });
+        await chrome.tabs.update(tab.id, { url: target, active: true });
+        return {
+          windowId: tab.windowId,
+          wasMinimized,
+          previousWindowId: lastFocused?.id ?? null,
+          previousNormalWindowId,
+          previousTabId
+        };
+      }
+      case 'RESTORE_TAB': {
+        // Return to the window and tab the user was on before Arena was brought forward for loading.
+        const { windowId, wasMinimized, previousWindowId, previousNormalWindowId, previousTabId } = message || {};
+        if (Number.isInteger(previousTabId)) {
+          await chrome.tabs.update(previousTabId, { active: true }).catch(() => {});
+        }
+        if (wasMinimized && Number.isInteger(windowId)) {
+          await chrome.windows.update(windowId, { state: 'minimized' }).catch(() => {});
+        }
+        if (Number.isInteger(previousNormalWindowId) && previousNormalWindowId !== windowId && previousNormalWindowId !== previousWindowId) {
+          await chrome.windows.update(previousNormalWindowId, { focused: true }).catch(() => {});
+        }
+        if (Number.isInteger(previousWindowId) && previousWindowId !== windowId) {
+          await chrome.windows.update(previousWindowId, { focused: true }).catch(() => {});
+        }
         return true;
       }
       case 'OPEN_ARENA': {

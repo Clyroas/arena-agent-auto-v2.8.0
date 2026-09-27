@@ -12,7 +12,7 @@ and dev-only.
 | Script | Does |
 |--------|------|
 | `npm run lint` | ESLint (flat config in `eslint.config.mjs`) |
-| `npm test` | `node --test "test/**/*.test.mjs"` — 92 tests |
+| `npm test` | `node --test "test/**/*.test.mjs"` — Node/jsdom tests |
 | `npm run check` | Both, in that order — what CI runs |
 
 ## Tests
@@ -21,18 +21,26 @@ The suites cover the pure helpers plus the paths that used to be untestable:
 
 | Suite | Covers |
 |-------|--------|
-| `core.test.mjs` | URL helpers (`isArena`/`isDirect`/`isDirectChat`, `directModelUrl`), `withTimeout`, `tabLabel`, `samePage` |
+| `core.test.mjs` | URL helpers (`isArena`/`isDirect`/`isDirectChat`, `directModelUrl`), `withTimeout`, `tabLabel`, `samePage`, `capabilitySummary` |
+| `capabilities.test.mjs` | The real `agent-dom.js` `capabilities()` snapshot under jsdom, fed into `capabilitySummary`: a healthy layout, a lost composer (drift), and a missing upload input (degraded, not blocking) |
 | `attachment-policy.test.mjs` | The pure file rules: count/size/MIME limits, extension↔MIME matching, edge cases |
 | `agent-client.test.mjs` | The panel client against a faked `chrome`: hang/timeout paths, teardown, the bounded worker calls |
 | `content-script.test.mjs` | The content script loaded into jsdom: connection handover (`portAlive` takeover), scan coalescing (40 mutations → 2 scans) |
 | `conversation-view.test.mjs` | Transcript rendering against the real `panel.html` markup contract — which element each state toggle lives on (also what the motion layer keys off) |
 | `live-view.test.mjs` | The moving parts of a turn: preview text, tool rows, question cards, response pairs |
 | `live-status.test.mjs` | "Last change N ago" status derivation |
+| `question-history.test.mjs` | Answered clarification rows stay history (not a second reply): remembered IDs, hidden remnants, answered-vs-unanswered completion, resume handover |
 | `rich-view.test.mjs` | Markdown/code rendering |
 | `screenshot.test.mjs` | Capture pipeline maths: slicing, caps, stitching decisions |
 | `preferences.test.mjs` | Whitelist-normalization of theme/text-size/accent prefs |
-| `stylesheet.test.mjs` | The CSS "linter": custom-property typos, animations pointing at missing keyframes, unbalanced braces, motion only on `transform`/`opacity`/colour, and the reduced-motion escape hatch |
+| `stylesheet.test.mjs` | The CSS "linter": custom-property typos, animations pointing at missing keyframes, unbalanced braces, motion only on `transform`/`opacity`/colour, the reduced-motion escape hatch, and every `icons/…` URL resolving to a packaged file |
+| `panel-aria.test.mjs` | The panel's accessibility contract in the real markup: every dialog has a resolvable name, no control has its role replaced by a structural one, `aria-*` id references resolve, ids are unique, and controls carry a name |
+| `palette-contrast.test.mjs` | The design system's colour bar: every text and state-graphic pair the panel renders is checked against WCAG AA (4.5:1 text, 3:1 graphics) for both themes and all four accents, with translucent surfaces composited as Chrome composites them |
+| `panel-lifecycle.test.mjs` | The real panel bootstrap and handlers (attachments, recovery, model confirmation, pickers) plus the panel-wide regressions: a cleared session leaves no draft counter behind, and option rows keep their button semantics inside the list |
 | `version-sync.test.mjs` | Every version anchor matches the manifest; the manifest references only files that exist; permissions and CSP are exactly as intended |
+| `agent-skills.test.mjs` | Vendored addyosmani/agent-skills pack: 25 skills, frontmatter names, shared checklists, resolving `references/` links, not packed |
+| `skill-presets.test.mjs` | The generated task-prompt library: it is byte-for-byte what the current `.agents/` pack derives, covers every skill and command, groups them by the phase `AGENTS.md` lists, and refuses to overflow the draft instead of truncating |
+| `panel-presets.test.mjs` | The real panel's Task prompts chip and dialog: grouping, search, empty state, insertion into a draft, the `PRESET_TOO_LONG` refusal, one-dialog-at-a-time, and that inserting never sends |
 
 ### The version-bump checklist
 
@@ -89,3 +97,36 @@ every pull request, and on demand. Lint catches the mistakes that break the pane
   hatch. See the motion table in [STABILITY-REVIEW.md](../STABILITY-REVIEW.md).
 - **Storage is appearance-only.** Anything that smells like chat content, credentials, or telemetry
   does not get persisted — see the table in [architecture.md](architecture.md).
+
+## Agent skills
+
+[addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) is vendored under [`.agents/`](../.agents/README.md) so coding agents follow the same spec → plan → build → verify → review → ship lifecycle. The files are Markdown workflows, not extension code:
+
+- Skills: `.agents/skills/<name>/SKILL.md` (Agent Skills spec layout)
+- Shared checklists: `.agents/references/`
+- Lifecycle commands: `.agents/commands/`
+- How agents should load them, plus this repo's overrides: [AGENTS.md](../AGENTS.md)
+
+Keep them off `extension-files.json`. Pin and refresh notes live in `.agents/SOURCE.md`. `test/agent-skills.test.mjs` checks the 25 skills, frontmatter names, checklists, and that relative `references/` links still resolve after a refresh.
+
+The one exception is the generated `skill-presets.js`, which *is* packaged so the side panel can offer the same workflows as ready-to-send drafts:
+
+```bash
+npm run build:presets    # regenerate skill-presets.js from .agents/
+```
+
+The script is a pure module (`scripts/build-skill-presets.mjs`); only its CLI branch writes. `test/skill-presets.test.mjs` calls the same generator and compares the output to the committed file, so refreshing the pack without regenerating fails the suite instead of shipping stale prompts.
+
+## Browser regressions and release artifacts (2.8.2)
+
+```bash
+npx playwright install --with-deps chromium
+npm run test:browser
+npm run package:extension
+```
+
+`test/browser/extension.spec.mjs` loads the real unpacked extension in a persistent Chromium context. All ordinary web requests are intercepted; `test/browser/fixtures/agent.html` is synthetic, not a private conversation or a claim about current Arena markup. The browser job runs separately from Node tests in CI. The implementation sandbox could discover these tests but could not launch Chromium; see [implementation status](IMPLEMENTATION-STATUS.md).
+
+`extension-files.json` is the reviewed release allow-list. Update it for new runtime modules/assets. Node tests verify packaged import/style/markup dependencies and panel/floating control parity. `npm run package:extension` writes `dist/arena-auto-chat-<version>/`, which can be loaded unpacked or zipped for distribution. Never include `node_modules`, tests, traces, `.git`, or development previews in the artifact.
+
+The version checklist also includes `attachment-policy.js`'s registration `VERSION`; changing its implementation without a version bump can leave an old registration in an already-open tab.

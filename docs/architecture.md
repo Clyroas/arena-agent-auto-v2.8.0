@@ -1,6 +1,6 @@
 # Architecture
 
-How Arena Auto Chat 2.8.0 is put together: the three Chrome contexts, the wire between them, and
+How Arena Auto Chat 2.9.0 is put together: the three Chrome contexts, the wire between them, and
 the paths a message, a file and a screenshot take. Companion to [STABILITY-REVIEW.md](../STABILITY-REVIEW.md),
 which documents why the guarantees below exist.
 
@@ -25,15 +25,16 @@ Two structural decisions shape everything else:
 
 ## The wire
 
-The version string is part of the protocol (`ADAPTER_VERSION` / `VERSION` = `2.8.0`, anchored in ten
-places and checked by `test/version-sync.test.mjs`). The panel refuses an adapter that reports a
+The version string is part of the protocol (`ADAPTER_VERSION` / `VERSION` = `2.8.2`, checked across the runtime
+files by `test/version-sync.test.mjs`). The panel refuses an adapter that reports a
 different version, and the worker refuses a page whose injected script did not register.
 
 Panel ⇄ content script port messages include `PROBE`, `READY`, `PING`/`PONG`, `MODEL`/`MODEL_INFO`,
-`SEND`, `CANCEL`/`CANCELLED`, `ANSWER_QUESTION`, `CHOOSE_RESPONSE`, `LOAD_HISTORY`, and streamed
+`SEND`, `CANCEL`/`CANCELLED`, `ANSWER_QUESTION`, `CHOOSE_RESPONSE`, `LOAD_HISTORY`, `PICKER`
+(repo/branch picker `open`/`pick`/`close`, answered by `PICKER_STATE`/`PICKER_ERROR`), and streamed
 event frames. The port itself provides liveness (it closes with the panel or the page); a heartbeat
 every 10 s keeps state flowing, and a 5-minute lease in the content script guards against a silent
-panel — sized to survive Chrome's once-a-minute timer throttling.
+panel — sized to survive Chrome's once-a-minute timer throttling. The panel separately reports 90 seconds without inbound frames as a nonresponsive tab and pauses new sends; it does not terminate generation or resend.
 
 Panel ⇄ worker one-shots (`chrome.runtime.sendMessage`) are bounded by `RPC_TIMEOUT_MS` (20 s) in
 the panel, so a worker that is restarted mid-request cannot leave the panel stuck in `busy` (which
@@ -69,8 +70,8 @@ for extension pages, `window.ArenaAgentAttachments` for the classic content scri
 
 On **Send with files**: the panel asks the worker for a single-use grant keyed by
 `tabId:documentId` with a 20-second window; the worker injects `stage-main.js` into the main world;
-the helper finds the file input marked with the grant token, inserts exactly the approved bytes, and
-returns only file metadata. Grants are pruned eagerly and released per document. A staged file that
+the helper finds the file input marked with the grant token, checks the request expiry, inserts exactly the approved bytes with the native FileList setter, consumes the marker, and
+returns only file metadata. The content-side wait is limited to 10 seconds; cancellation/timeout removes the marker so a delayed helper cannot use it. This acknowledges insertion, not completion of a site upload. Grants are pruned eagerly and released per document. A staged file that
 cannot be matched exactly (name + size + type when reported) is skipped with a visible note — never
 substituted. Bytes are never stored, logged, cached, or sent anywhere else.
 
@@ -83,6 +84,29 @@ Chrome's ~2 captures/second quota is handled with up to 4 rate-limit retries at 
 genuine failure surfaces as a clean, coded error. Requires the optional `<all_urls>` host
 permission, requested on first use and revocable in Settings. Nothing is stored.
 
+## Repo & branch pickers
+
+Arena's Agent Mode can work on a GitHub repository; its composer then shows a repository and a branch
+picker (Radix popovers). Since 2.9.0 the panel mirrors both. `agent-dom.js` recognises the triggers by
+their exact icon geometry plus the trigger shape (`aria-haspopup="dialog"`, `aria-controls`, one
+truncated label), reports them read-only through `READY`/`MODEL_INFO` as `repoPickers`, and exposes the
+drive primitives. Every panel action goes through Arena's own controls on the tab's direct port:
+
+- **open** — one click on the trigger (or adoption of an already-open popover, since a second click would
+  toggle it closed), then the option rows are read from the popover its `aria-controls` names. Only
+  `role="option"` rows, or buttons inside a `role="listbox"`, are accepted; anything else is a coded
+  `PICKER_UNRECOGNIZED` and the popover is left for the user.
+- **pick** — one exact-match click on one option row; unknown, duplicate or disabled options are refused
+  with nothing clicked. Confirmation is read back from the page: the popover closed **and** the trigger's
+  label now shows the chosen value. Anything else is `PICK_NOT_CONFIRMED` — never re-clicked.
+- **close** — one Escape keydown on the recognized popover, then verification that it closed.
+
+One action id per dialog ties the panel and the tab together, so a frame from a closed dialog can never
+act as the current one. A Send while a picker is open fails closed (`PICKER_OPEN`), picker actions while
+a turn is tracked fail closed (`PICKER_BUSY`), and a lost panel connection closes a popover it left open
+with one best-effort Escape. There is no GitHub API, no extra permission and no storage: repo and branch
+names are read from the page the user already trusts, capped at 120 characters, and never persisted.
+
 ## State and storage
 
 | Data | Where | Notes |
@@ -90,21 +114,21 @@ permission, requested on first use and revocable in Settings. Nothing is stored.
 | Theme (`light`/`dark`/`system`) | panel `localStorage` (`arenaAgentTheme`) | Appearance only |
 | Text size, accent | panel `localStorage` (`arenaAgentAppearance`) | Whitelist-normalized on load |
 | Recent Direct models (names, max 5) | panel `localStorage` (`arena-auto-recent-models`) | Names only, ≤ 120 chars |
-| Floating window bounds | `chrome.storage` via `window-geometry.js` | Numeric normal-window bounds only |
+| Floating window bounds | `localStorage` via `window-geometry.js` | Numeric normal-window bounds only |
 | Staged file bytes | panel memory | Only for the current Send; single-use grant |
 | Chat content, prompts, replies, screenshots, account data | — | Never stored anywhere |
 
 Extension pages declare `connect-src 'none'`: the extension itself makes no network requests.
-`copy.js` writes to the clipboard on the user's click and never reads it.
+`copy.js` writes to the clipboard on the user's click. The panel handles explicit text/image paste events but never performs background clipboard reads.
 
 ## Module index
 
 | Module | Exports / role |
 |--------|----------------|
-| `core.js` | `AGENT_URL`, `DIRECT_URL`, `isArena`/`isDirect`/`isDirectChat`, `directModelUrl`, `samePage`, `tabLabel`, `withTimeout` |
-| `agent-dom.js` | `globalThis.ArenaAgentDOM`: selectors, transcript reading, typing, clicking, coded `DomError`s |
+| `core.js` | `AGENT_URL`, `DIRECT_URL`, `isArena`/`isDirect`/`isDirectChat`, `directModelUrl`, `samePage`, `tabLabel`, `withTimeout`, `capabilitySummary` |
+| `agent-dom.js` | `globalThis.ArenaAgentDOM`: selectors, transcript reading, typing, clicking, coded `DomError`s, `capabilities()` — a non-throwing semantic snapshot of which named controls the page currently exposes — and the repo/branch picker primitives (`pickerTriggers`, `repoInfo`, `pickerDialog`, `readPickerOptions`, `pickPickerOption`, `closePickerDialog`) |
 | `agent-content.js` | Connection ownership, heartbeat lease, scan coalescing, registration guard |
-| `agent-client.js` | `AgentClient`: the panel's direct port, heartbeat, bounded worker calls |
+| `agent-client.js` | `AgentClient`: the panel's direct port, heartbeat, bounded worker calls, normalized `repoPickers` state |
 | `conversation-view.js` | Transcript rendering against the real `panel.html` markup contract |
 | `live-view.js` / `rich-view.js` / `live-status.js` | Live activity, rich (Markdown/code) rendering, status derivation |
 | `panel.js` | Panel bootstrap: tabs, state machine, notices, dialogs, settings |
@@ -113,3 +137,34 @@ Extension pages declare `connect-src 'none'`: the extension itself makes no netw
 | `worker.js` | One-shot router: attach, staged grants, floating window |
 | `floating-window.js` / `window-geometry.js` | Popup window creation and bound fitting |
 | `theme.js` / `customization.js` / `recent-models.js` / `copy.js` | Appearance, recents, clipboard write |
+| `skill-presets.js` | Generated task prompts (the only shipped slice of `.agents/`) plus the pure `composePresetText` / `findPresets` helpers |
+
+## Task prompts
+
+The panel's **Task prompts** chip (composer dock) lists every workflow in the vendored agent-skills
+pack as a ready-to-send draft: 25 skills grouped by lifecycle phase, plus the 9 `/spec` `/plan`
+`/build` `/test` `/review` `/ship` entry points. Choosing one writes that workflow and a `My task:`
+line into the composer. Nothing is sent, nothing is stored, and the single-click Send below stays the
+only way out — the preset path shares no code with the send path.
+
+The pack is Markdown for coding agents and is deliberately not packaged (AGENTS.md), so it cannot be
+read at runtime. `scripts/build-skill-presets.mjs` derives `skill-presets.js` from `.agents/` instead
+(one prompt per `SKILL.md` and per command, grouped by the phase table in AGENTS.md), and
+`test/skill-presets.test.mjs` re-runs that derivation and compares it byte-for-byte with the
+committed file. A pack refresh that forgets `npm run build:presets` therefore fails the suite rather
+than shipping prompts that no longer match the pack.
+
+A preset that would push the draft past Arena's 30,000-character limit is refused with a coded
+`PRESET_TOO_LONG` notice and inserts nothing — a silently truncated workflow prompt is worse than no
+prompt. The chip hides when the composer is locked, and a turn starting while the dialog is open
+closes it rather than trapping focus over a draft you can no longer type in.
+
+## 2.8.2 recovery additions
+
+- `attachment-state.js` preserves source File identity, transfers unsent originals back to a draft, and drops historical references. Transport payloads stay local to the send operation and are released in `finally`.
+- `tab-awake.js` serializes acquire/release and restores the original tab flag; worker navigation does not change discardability.
+- ATTACH and handshake have separate budgets (20 s and 15 s). WAITING for an Arena dialog allows at most 120 s, with independent Open Arena / Cancel connection controls. History requests have a 15 s deadline.
+- Screenshot operations carry a session epoch, exact draft and AbortController. Capture is document-bound; stitching decodes one bitmap at a time and caps total canvas pixels. User focus is restored only if the capture window still held it.
+- Same-page explicit reconnect preserves local content and re-watches only verified accepted message IDs. A different conversation still requires confirmation and a new connection.
+
+See [implementation status](IMPLEMENTATION-STATUS.md) for test coverage, browser-validation limitations and work deliberately not yet implemented.

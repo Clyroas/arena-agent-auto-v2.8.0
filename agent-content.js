@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '2.8.0';
+  const VERSION = '2.9.0';
   const runtime = chrome.runtime;
   const previous = globalThis.__ARENA_AGENT_REGISTRATION__;
   if (previous?.version === VERSION && previous.isAlive?.()) return;
@@ -8,18 +8,51 @@
   const D = globalThis.ArenaAgentDOM;
   let owner = null, transaction = null, lastHeartbeat = 0, timer = null, observer = null;
   let scanQueued = false, scanTimer = null, lastScanAt = 0;
+  // The repo/branch picker session the panel opened: { actionId, kind }. Only ever one at a time.
+  let picker = null;
   // Liveness comes from the port itself (it closes with the panel or page). The lease only guards
   // against a silent panel, and is long enough for Chrome's once-a-minute timer throttling.
   const LEASE_MS = 5 * 60 * 1000;
   const consumed = new Set();
   const documentId = crypto.randomUUID();
-  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.8.0' }); } catch { cleanup(); } }
-  function stopTransaction() { transaction = null; }
+  function emit(message) { try { owner?.postMessage({ ...message, documentId, adapterVersion: '2.9.0' }); } catch { cleanup(); } }
+  const STAGE_TIMEOUT_MS = 10000;
+  function clearStaging(tx) {
+    if (!tx) return;
+    if (tx.stageToken) {
+      for (const input of document.querySelectorAll('input[type="file"][data-arena-agent-stage]'))
+        if (input.getAttribute('data-arena-agent-stage') === tx.stageToken) input.removeAttribute('data-arena-agent-stage');
+      tx.stageToken = null;
+      try { chrome.runtime.sendMessage({ type: 'CLEAR_STAGE' }).catch(() => {}); } catch { /* context closing */ }
+    }
+    for (const item of tx.staged || []) item.bytes = new Uint8Array(0);
+    tx.staged = [];
+  }
+  function stopTransaction() {
+    const old = transaction; transaction = null;
+    old?.abort?.abort(); clearStaging(old);
+  }
+  function stageResponse(promise, tx) {
+    return new Promise((resolve, reject) => {
+      const finish = (fn, value) => { clearTimeout(timer); tx.abort.signal.removeEventListener('abort', cancel); fn(value); };
+      const cancel = () => finish(reject, new D.DomError('CANCELLED', 'Staging cancelled. Check the Arena composer; nothing was retried.'));
+      const timer = setTimeout(() => finish(reject, new D.DomError('STAGE_TIMEOUT', 'File staging did not answer within 10 seconds. No Send click was attempted. Check the Arena composer before trying again.')), STAGE_TIMEOUT_MS);
+      tx.abort.signal.addEventListener('abort', cancel, { once: true });
+      if (tx.abort.signal.aborted) cancel();
+      Promise.resolve(promise).then(value => finish(resolve, value), error => finish(reject, error));
+    });
+  }
   function cleanup() {
     stopTransaction(); observer?.disconnect(); observer = null;
     clearTimeout(scanTimer); scanTimer = null; scanQueued = false;
     document.removeEventListener('click', onPageClick, true);
     clearInterval(timer); timer = null;
+    // The panel is gone: if it left one of Arena's pickers open, try once to close it so the tab is not
+    // stranded with a popover over its composer. Best effort only — never throws, never retries.
+    if (picker) {
+      const kind = picker.kind; picker = null;
+      try { const dialog = D.pickerDialog(kind); if (dialog) D.closePickerDialog(dialog); } catch { /* best effort */ }
+    }
     const old = owner; owner = null;
     try { old?.disconnect(); } catch { /* already closed */ }
   }
@@ -76,16 +109,11 @@
     if (!A) D.fail('ADAPTER_ERROR', 'The attachment policy failed to load. No prompt was sent.');
     if (list.length > A.ATTACHMENT_POLICY.maxFiles) D.fail('INVALID_ATTACHMENT', `Only ${A.ATTACHMENT_POLICY.maxFiles} files can accompany one message.`);
     return list.map(item => {
-      if (!item || typeof item.name !== 'string' || typeof item.type !== 'string' || typeof item.data !== 'string' ||
-          item.data.length > Math.ceil(A.ATTACHMENT_POLICY.maxBytes * 4 / 3) + 8)
-        D.fail('INVALID_ATTACHMENT', 'Every attachment needs a name, type and encoded contents within the size limit.');
-      const { accepted, rejected } = A.validateAttachments([{ name: item.name, type: item.type, size: Math.round(item.data.length * 3 / 4) }]);
-      if (rejected.length || !accepted.length) D.fail('INVALID_ATTACHMENT', rejected[0]?.reason || 'That file is not supported.');
-      const bytes = A.base64ToBytes(item.data);
-      if (!bytes.byteLength || bytes.byteLength > A.ATTACHMENT_POLICY.maxBytes) D.fail('INVALID_ATTACHMENT', 'The attachment contents are empty or exceed the size limit.');
-      return { name: accepted[0].name, type: accepted[0].type, bytes };
+      try { return A.decodeAttachment(item); }
+      catch (e) { return D.fail('INVALID_ATTACHMENT', e.message); }
     });
   }
+
   // Attachment chips may add a short suffix; the wording itself must stay identical.
   function composerMatches(tx, text) { return D.promptMatches(tx, text); }
   // After the one Send click: signs that Arena took the message even though it has not drawn the user
@@ -108,12 +136,13 @@
     // Marks exactly one verified composer input; the page-context helper refuses anything else.
     const request = D.stageRequestFor(field, tx.staged.map(item => ({ name: item.name, type: item.type, size: item.bytes.byteLength })));
     tx.stageToken = request.token;
+    const expiresAt = Date.now() + STAGE_TIMEOUT_MS;
     emit({ type: 'STAGED', requestId: tx.requestId, count: tx.staged.length });
     // Bytes are handed to the worker and written by the page-context staging helper, then erased here.
     const payload = tx.staged.map(item => ({ name: item.name, type: item.type, data: A.bytesToBase64(item.bytes) }));
     let response;
-    try { response = await chrome.runtime.sendMessage({ type: 'STAGE_FILES', token: request.token, files: payload }); }
-    catch (e) { D.fail('STAGE_FAILED', `The extension worker could not stage the files (${e?.message || 'no response'}).`); }
+    try { response = await stageResponse(chrome.runtime.sendMessage({ type: 'STAGE_FILES', token: request.token, expiresAt, files: payload }), tx); }
+    catch (e) { D.fail(e.code || 'STAGE_FAILED', `The extension worker could not stage the files (${e?.message || 'no response'}).`); }
     finally { for (const item of payload) item.data = ''; payload.length = 0; }
     if (transaction !== tx || !owner) return false;
     if (!response?.ok) D.fail(response?.code || 'STAGE_FAILED', `${response?.error || 'The files could not be placed in the Arena composer.'} Nothing was sent; the extension did not retry or fall back.`);
@@ -202,6 +231,9 @@
     }
   }
   const DIRECT_SETTLE_MS = 5000, PAIR_SETTLE_MS = 30000, PROMPT_SETTLE_MS = 8000;
+  // A verification clears through a transcript re-mount on Agent pages too (not just Direct), so the same
+  // settle idea is allowed there for a bounded window, anchored on the accepted message ID.
+  const SECURITY_SETTLE_MS = 8000;
   // Battles in Direct: the user asked the panel to continue with Response A or B. One click on Arena's
   // own "Continue with A/B" button, only when Arena has enabled it; never automatic, never retried.
   function chooseResponse(message) {
@@ -243,29 +275,97 @@
     emit({ type: 'CHOICE_SEEN', requestId: tx.requestId, side });
     queueScan();
   }
+  // A security verification (captcha / "verify you are human" interstitial) is transient: the user
+  // clears it in the Arena tab and the page returns to normal. Treating it as a fatal block stopped
+  // capture for good and made the panel look broken after the human had already passed it. Instead the
+  // loop holds the in-flight turn, tells the panel once, and resumes by itself on the next scan after the
+  // notice disappears. Only this notice is held; rate limits, sign-in walls and Arena errors stay fatal
+  // (see checkBlocks below). Returns true when the caller must stop this scan.
+  function holdForSecurity(tx) {
+    const notice = D.securityNotice?.() || '';
+    if (notice) {
+      if (!tx.securityHold) {
+        tx.securityHold = true; tx.securityHoldSince = Date.now();
+        emit({ type: 'BLOCKED', requestId: tx.requestId, code: 'SECURITY_CHECK', message: notice, clicked: !!tx.clicked, accepted: !!tx.userId });
+      }
+      return true;
+    }
+    if (tx.securityHold) {
+      tx.securityHold = false;
+      // A pause must not spend the "did Arena take the message?" budget: shift the deadline by however
+      // long the verification was up, so resuming does not immediately report SEND_NOT_CONFIRMED. The
+      // resume path uses Infinity as "no deadline", which must stay Infinity.
+      if (typeof tx.ackDeadline === 'number' && Number.isFinite(tx.ackDeadline)) tx.ackDeadline += Date.now() - (tx.securityHoldSince || Date.now());
+      tx.securityHoldSince = 0;
+      // Mark the resume. Arena frequently re-mounts the transcript as the interstitial disappears, so the
+      // next scans can briefly see zero rows; scan() allows a bounded settle for that, anchored on the
+      // accepted message ID, rather than treating the remount as an unrelated conversation.
+      tx.securityClearedAt = Date.now();
+      emit({ type: 'SECURITY_CLEARED', requestId: tx.requestId, clicked: !!tx.clicked, accepted: !!tx.userId });
+    }
+    return false;
+  }
+  // Bounded wait for the user to clear a verification before a Send. Unlike the tracking loop scan(),
+  // this cannot poll forever: the panel is already in "Sending…" holding the user's staged bytes, so after
+  // the deadline the request is stopped with an explicit code rather than left hanging. Sending into a
+  // page that is still showing a challenge would be unsafe, so it is refused, never retried.
+  const SECURITY_WAIT_MS = 120000;
+  async function waitOutSecurity(tx) {
+    if (!(D.securityNotice?.() || '')) return;
+    const deadline = Date.now() + SECURITY_WAIT_MS;
+    while (transaction === tx && owner && (D.securityNotice?.() || '')) {
+      if (!tx.securityHold) {
+        tx.securityHold = true;
+        emit({ type: 'BLOCKED', requestId: tx.requestId, code: 'SECURITY_CHECK', message: 'Arena is showing a security verification.', clicked: !!tx.clicked, accepted: !!tx.userId });
+      }
+      if (Date.now() >= deadline)
+        D.fail('SECURITY_CHECK', 'A security verification is still showing after two minutes. Complete it in the Arena tab, then send again. No Send click was attempted.');
+      await sleep(300);
+    }
+    if (tx.securityHold) {
+      tx.securityHold = false;
+      emit({ type: 'SECURITY_CLEARED', requestId: tx.requestId, clicked: !!tx.clicked, accepted: !!tx.userId });
+    }
+  }
   function scan() {
     const tx = transaction;
     if (!owner || !tx || !tx.clicked) return;
     lastScanAt = Date.now();
     try {
+      // Hold before checkBlocks so a transient verification never reaches the fatal path below.
+      if (holdForSecurity(tx)) return;
       D.checkBlocks();
       let result;
-      try { result = D.matchTurn(tx); tx.unclearSince = 0; }
-      catch (e) {
+      try { result = D.matchTurn(tx); tx.unclearSince = 0; tx.securityClearedAt = 0; }
+      catch (caught) {
         // Direct pages re-render while Arena moves a new chat to /c/<id>; a momentary odd row layout
         // is not a reason to stop. Nothing is captured while unclear; if it persists, fail as before.
         // The same applies when Arena redraws the reply area (for example after a response pair's
         // choice or Skip, which can wait on Arena's server): rows may vanish briefly and come back.
         // Arena can also switch a response pair between layouts; two replies seen for a moment is not final.
         // A new chat may draw the user's message before its text (fade-in / late fill): give it a moment.
-        const grace = e?.code === 'PROMPT_MISMATCH' ? PROMPT_SETTLE_MS
-          : ['AMBIGUOUS_TURN', 'CONVERSATION_CHANGED', 'AMBIGUOUS_REPLY'].includes(e?.code) && D.pageKind() === 'direct'
-            ? (tx.pairChoice ? PAIR_SETTLE_MS : DIRECT_SETTLE_MS) : 0;
-        if (grace) {
-          tx.unclearSince ||= Date.now();
-          if (Date.now() - tx.unclearSince < grace) { tx.completedText = ''; tx.completeAt = 0; return; }
+        // A security verification clears through a transcript re-mount (rows briefly gone / reordered).
+        // The accepted message ID survives that, so re-anchor on it and retry once before giving up.
+        let e = caught, settled = false;
+        if (['CONVERSATION_CHANGED', 'AMBIGUOUS_TURN', 'AMBIGUOUS_REPLY'].includes(e?.code) &&
+            Date.now() - (tx.securityClearedAt || 0) < SECURITY_SETTLE_MS) {
+          if (D.reanchor?.(tx)) {
+            try { result = D.matchTurn(tx); tx.unclearSince = 0; tx.securityClearedAt = 0; settled = true; }
+            catch (retry) { e = retry; }
+          }
+          // Still re-mounting: wait quietly and never capture from a partial transcript.
+          if (!settled && Date.now() - tx.securityClearedAt < SECURITY_SETTLE_MS) { tx.completedText = ''; tx.completeAt = 0; return; }
         }
-        throw e;
+        if (!settled) {
+          const grace = e?.code === 'PROMPT_MISMATCH' ? PROMPT_SETTLE_MS
+            : ['AMBIGUOUS_TURN', 'CONVERSATION_CHANGED', 'AMBIGUOUS_REPLY'].includes(e?.code) && D.pageKind() === 'direct'
+              ? (tx.pairChoice ? PAIR_SETTLE_MS : DIRECT_SETTLE_MS) : 0;
+          if (grace) {
+            tx.unclearSince ||= Date.now();
+            if (Date.now() - tx.unclearSince < grace) { tx.completedText = ''; tx.completeAt = 0; return; }
+          }
+          throw e;
+        }
       }
       checkUrl(tx, result);
       // Remember what the two responses said, so a later redraw can tell the chosen one from the other.
@@ -356,8 +456,11 @@
       D.checkBlocks();
       const list = D.rows(), index = list.findIndex(row => row.id === message.userMessageId && row.user);
       if (index < 0) D.fail('WATCH_UNAVAILABLE', 'Your message is no longer visible in the Arena tab, so its reply cannot be tracked here. Read it in Arena; nothing was resent.');
+      // v2.8.1: rows that held a clarification card before the reconnect stay history after it, so an
+      // answered card whose controls are already gone cannot look like a second reply (AMBIGUOUS_REPLY).
+      const known = Array.isArray(message.knownQuestionRows) ? message.knownQuestionRows.filter(id => typeof id === 'string' && id.length <= 200).slice(0, 64) : [];
       const tx = { requestId: message.requestId, prompt: message.prompt.trim(), url: location.href, clicked: true, resumed: true,
-        userId: message.userMessageId, baseline: list.slice(0, index).map(row => row.id), ackDeadline: Infinity, attachmentLabels: !!message.hadAttachments };
+        userId: message.userMessageId, baseline: list.slice(0, index).map(row => row.id), ackDeadline: Infinity, attachmentLabels: !!message.hadAttachments, questionRows: known };
       transaction = tx;
       emit({ type: 'WATCHING', requestId: tx.requestId });
       scan();
@@ -371,10 +474,17 @@
     if (consumed.has(message.requestId)) return emit({ type: 'ERROR', requestId: message.requestId, code: 'DUPLICATE_REQUEST', message: 'This request was already attempted. It will not be sent again.', clicked: false });
     consumed.add(message.requestId);
     if (consumed.size > 128) consumed.delete(consumed.values().next().value);
-    const tx = { requestId: message.requestId, prompt: message.prompt.trim(), url: location.href, clicked: false };
+    const tx = { requestId: message.requestId, prompt: message.prompt.trim(), url: location.href, clicked: false, abort: new AbortController() };
     transaction = tx;
     try {
       if (!D.samePage(message.url, location.href)) D.fail('CONVERSATION_CHANGED', 'The tab URL changed. Reconnect before sending.');
+      await waitOutSecurity(tx);
+      if (transaction !== tx || !owner) return;
+      // An open repo/branch picker covers the composer and is a user's in-progress choice; it is never
+      // dismissed from under them. Close it (here or in Arena), then send.
+      const openPickers = D.pickersOpen?.() || [];
+      if (openPickers.length)
+        D.fail('PICKER_OPEN', `Arena’s ${openPickers.map(pickerName).join(' and ')} picker is open. Close it before sending; nothing was sent and no Send click was attempted.`);
       const prepared = await prepareComposer(tx);
       if (!prepared || transaction !== tx || !owner) return;
       D.checkBlocks();
@@ -385,7 +495,7 @@
       emit({ type: 'SENDING', requestId: tx.requestId, inputKind: field.tagName === 'TEXTAREA' ? 'textarea' : 'contenteditable' });
       if (transaction !== tx || !owner) return;
       D.writeComposer(field, tx.prompt);
-      try { tx.staged = attachmentsFor(message.attachments); } catch (e) { tx.staged = []; D.fail(e.code || 'INVALID_ATTACHMENT', e.message); }
+      try { tx.staged = attachmentsFor(message.attachments); message.attachments = null; } catch (e) { tx.staged = []; D.fail(e.code || 'INVALID_ATTACHMENT', e.message); }
       if (tx.staged.length && !(await stageAttachments(tx, field))) return;
       if (transaction !== tx || !owner) return;
       const enableDeadline = Date.now() + 2500;
@@ -407,17 +517,10 @@
       // Exactly one click attempt. No click/Enter retry on any failure or disconnect.
       tx.clicked = true; tx.ackDeadline = Date.now() + 15000;
       button.click(); scan();
-    } catch (e) { error(e, tx); }
-    finally {
-      if (tx.stageToken) {
-        for (const input of document.querySelectorAll('input[type="file"][data-arena-agent-stage]'))
-          if (input.getAttribute('data-arena-agent-stage') === tx.stageToken) input.removeAttribute('data-arena-agent-stage');
-        try { chrome.runtime.sendMessage({ type: 'CLEAR_STAGE' }).catch(() => {}); } catch { /* context closing */ }
-      }
-      for (const item of tx.staged || []) item.bytes = new Uint8Array(0);
-      tx.staged = [];
-    }
+    } catch (e) { if (transaction === tx) error(e, tx); }
+    finally { clearStaging(tx); }
   }
+
   // Explicit, read-only snapshot of the earlier turns currently rendered in this conversation.
   function loadHistory(message) {
     const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 80) : '';
@@ -437,7 +540,124 @@
     // An Arena dialog over the message box (the message box itself is otherwise fine).
     let blocked = '';
     try { D.composer(); } catch (e) { if (e.code === 'ARENA_DIALOG_OPEN') blocked = e.message; }
-    return { pageKind, model: pageKind === 'direct' ? D.currentModel() : '', models, blocked };
+    return { pageKind, model: pageKind === 'direct' ? D.currentModel() : '', models, blocked, capabilities: capabilityInfo(), repoPickers: freshPickers() };
+  }
+  // The named capabilities Arena currently exposes. Diagnostic only: a failure here must never stop an
+  // otherwise usable connection, so it collapses to null and the panel says "not reported".
+  function capabilityInfo() {
+    try { return D.capabilities?.() || null; } catch { return null; }
+  }
+  // ---- Repo & branch pickers (v2.9.0) ---------------------------------------------------------
+  // Arena's Agent Mode can work on a GitHub repository; its repository and branch pickers sit beside the
+  // composer. The panel mirrors them, and every panel action drives Arena's own controls: one click to
+  // open, one exact-match click to choose, one Escape to close, each verified from what the page then
+  // shows. There is no GitHub API here and nothing is sent to Arena. Pickers only work while idle — a
+  // running turn refuses picker actions (PICKER_BUSY) and an open picker refuses a Send (PICKER_OPEN) —
+  // so the two never interleave on the same page.
+  const PICKER_OPEN_MS = 5000, PICKER_PICK_MS = 8000, PICKER_CLOSE_MS = 3000;
+  const pickerName = kind => (kind === 'repo' ? 'repository' : 'branch');
+  function freshPickers() { try { return D.repoInfo?.() || null; } catch { return null; } }
+  function pickerError(actionId, kind, code, message, clicked = false) {
+    emit({ type: 'PICKER_ERROR', actionId, kind, code, message, clicked, repoPickers: freshPickers() });
+  }
+  // After a pick, the trigger label is the only confirmation accepted: Arena's popover closed AND its
+  // button now shows the chosen value. Anything else is reported unconfirmed — never re-clicked.
+  async function pickFromPicker(kind, actionId, value) {
+    if (!picker || picker.kind !== kind || picker.actionId !== actionId)
+      D.fail('PICKER_STALE', 'This picker session is no longer current. Close the dialog and open the picker again.');
+    if (typeof value !== 'string' || !value.trim() || value.length > 120)
+      D.fail('INVALID_PICK', 'Choose one of the options Arena is currently showing.');
+    const dialog = D.pickerDialog(kind);
+    if (!dialog) { picker = null; D.fail('PICKER_CLOSED', 'Arena’s picker is no longer open. Nothing was clicked.'); }
+    const confirmFail = (code, message) => { const error = new D.DomError(code, message); error.pickerClicked = true; throw error; };
+    D.pickPickerOption(dialog, value); // throws before any click; clicks exactly once otherwise
+    const want = D.normalize(value);
+    const deadline = Date.now() + PICKER_PICK_MS;
+    for (;;) {
+      await sleep(150);
+      if (transaction || !owner) return; // a takeover ended this session; nothing more happens here
+      if (!D.pickerDialog(kind)) {
+        const label = D.pickerTriggers()[kind]?.label || '';
+        if (D.normalize(label) === want) {
+          picker = null;
+          emit({ type: 'PICKER_STATE', actionId, kind, phase: 'done', value: label, repoPickers: freshPickers() });
+          return;
+        }
+        if (Date.now() >= deadline) { picker = null; confirmFail('PICK_NOT_CONFIRMED', `Arena closed its ${pickerName(kind)} picker, but its button now shows “${label || 'nothing'}” instead of “${want}”. The option was clicked once; check the Arena tab. It will not be retried.`); }
+      } else if (Date.now() >= deadline) {
+        confirmFail('PICK_NOT_CONFIRMED', `Arena’s ${pickerName(kind)} picker did not close after the option was clicked. The choice was attempted once; check the Arena tab. It will not be retried.`);
+      }
+    }
+  }
+  async function openPicker(kind, actionId) {
+    const triggers = D.pickerTriggers();
+    if (triggers.ambiguous)
+      D.fail('PICKER_AMBIGUOUS', 'Multiple repo/branch pickers are visible on this page. The extension refuses to guess which one to drive; pick in the Arena tab.');
+    const trigger = triggers[kind];
+    if (!trigger)
+      D.fail('PICKER_UNAVAILABLE', `Arena is not showing its ${pickerName(kind)} picker on this page. ${kind === 'branch' ? 'Choose a repository first — ' : ''}Connect or change it in the Arena tab.`);
+    // Already open (a Radix trigger that is already expanded would toggle closed on a second click):
+    // adopt the open picker and report its current list instead of clicking.
+    let dialog = D.pickerDialog(kind);
+    if (!dialog) {
+      if (!D.enabled(trigger.el) || trigger.el.closest('[inert]'))
+        D.fail('PICKER_DISABLED', `Arena’s ${pickerName(kind)} picker is not available right now. Choose in the Arena tab.`);
+      trigger.el.click(); // one click; never retried
+      const deadline = Date.now() + PICKER_OPEN_MS;
+      while (!(dialog = D.pickerDialog(kind))) {
+        if (transaction || !owner) return; // a Send or takeover took over mid-wait
+        if (Date.now() >= deadline)
+          D.fail('PICKER_NOT_OPENED', `Arena did not open its ${pickerName(kind)} picker. Nothing was retried; check the Arena tab and open it there if needed.`);
+        await sleep(150);
+      }
+    }
+    picker = { actionId, kind };
+    // An unreadable list leaves the popover open for the user; the session stays so Close still works.
+    const list = D.readPickerOptions(dialog);
+    emit({ type: 'PICKER_STATE', actionId, kind, phase: 'open', options: list.options, query: list.query, repoPickers: freshPickers() });
+  }
+  async function closePickerSession(kind, actionId) {
+    const dialog = D.pickerDialog(kind);
+    if (!dialog) {
+      picker = null;
+      emit({ type: 'PICKER_STATE', actionId, kind, phase: 'closed', repoPickers: freshPickers() });
+      return;
+    }
+    D.closePickerDialog(dialog); // one Escape; the site may also ignore it
+    const deadline = Date.now() + PICKER_CLOSE_MS;
+    while (D.pickerDialog(kind)) {
+      if (transaction || !owner) return;
+      if (Date.now() >= deadline)
+        D.fail('PICKER_STILL_OPEN', `Arena’s ${pickerName(kind)} picker did not close. Close it in the Arena tab yourself; nothing else was clicked.`);
+      await sleep(120);
+    }
+    picker = null;
+    emit({ type: 'PICKER_STATE', actionId, kind, phase: 'closed', repoPickers: freshPickers() });
+  }
+  async function handlePicker(message) {
+    if (!owner) return;
+    const kind = message.kind === 'repo' || message.kind === 'branch' ? message.kind : '';
+    const action = ['open', 'pick', 'close'].includes(message.action) ? message.action : '';
+    const actionId = typeof message.actionId === 'string' && /^[\da-f-]{36}$/i.test(message.actionId) ? message.actionId : '';
+    if (!kind || !action || !actionId)
+      return pickerError('', '', 'INVALID_PICKER_REQUEST', 'Unrecognized repo/branch picker request. Nothing was clicked.');
+    if (transaction)
+      return pickerError(actionId, kind, 'PICKER_BUSY', 'This tab is already tracking a request. Wait for it to finish before using Arena’s repo or branch picker.');
+    try {
+      // Only one picker at a time: the other kind still being open is an in-progress user choice.
+      const other = kind === 'repo' ? 'branch' : 'repo';
+      if (D.pickerDialog(other))
+        D.fail('PICKER_BUSY', `Arena’s ${pickerName(other)} picker is still open. Close it before opening the ${pickerName(kind)} picker.`);
+      // The page-wide notice scan runs only while no picker popover is open: an open list is page
+      // content (repository names can read like notice words — “captcha-solver”), never a notice.
+      if (!D.pickersOpen().length) D.checkBlocks();
+      if (action === 'open') await openPicker(kind, actionId);
+      else if (action === 'pick') await pickFromPicker(kind, actionId, message.value);
+      else await closePickerSession(kind, actionId);
+    } catch (error) {
+      pickerError(actionId, kind, error.code || 'PICKER_FAILED',
+        error.message || `The ${pickerName(kind)} picker action failed. Check the Arena tab.`, !!error.pickerClicked);
+    }
   }
   let probingPort = null;
   async function probe(port) {
@@ -457,7 +677,17 @@
             if (waiting !== e.message) { waiting = e.message; emit({ type: 'WAITING', code: e.code, message: e.message }); }
             deadline = Date.now() + 12000; await sleep(400); continue;
           }
-          // Only wait for missing/mounting UI. Never retry a Send or a security failure.
+          // A verification interstitial hides the composer behind a transient notice. Wait for the user to
+          // clear it (with the long dialog budget) instead of failing the handshake: once it passes, the
+          // same loop reaches READY and the panel learns the site verified. Only wait for this and for
+          // missing/mounting UI. Never retry a Send or a rate-limit/sign-in failure.
+          if (e.code === 'SECURITY_CHECK') {
+            if (waiting !== 'SECURITY_CHECK') {
+              waiting = 'SECURITY_CHECK';
+              emit({ type: 'WAITING', code: 'SECURITY_CHECK', message: 'Arena is showing a security verification. Complete it in the Arena tab; the panel will connect on its own once it passes.' });
+            }
+            deadline = Date.now() + 12000; await sleep(400); continue;
+          }
           if (!['COMPOSER_NOT_FOUND', 'SEND_BUTTON_NOT_FOUND'].includes(e.code) || Date.now() >= deadline) { error(e, null); return; }
           await sleep(200);
         }
@@ -500,6 +730,7 @@
         probe(port);
       } else if (message?.type === 'SEND') send(message);
       else if (message?.type === 'ANSWER_QUESTION') answerQuestion(message);
+      else if (message?.type === 'PICKER') handlePicker(message);
       else if (message?.type === 'CHOOSE_RESPONSE') chooseResponse(message);
       else if (message?.type === 'LOAD_HISTORY') loadHistory(message);
       else if (message?.type === 'CANCEL') {

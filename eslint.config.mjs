@@ -19,8 +19,9 @@ const browser = {
 };
 
 export default [
+  { ignores: ['dist/**', 'test-results/**', 'playwright-report/**'] },
   {
-    files: ['*.js', 'dev/**/*.js', 'test/**/*.mjs'],
+    files: ['*.js', 'dev/**/*.js', 'test/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: { ...browser, chrome: 'readonly' } },
     rules: {
       'no-undef': 'error',
@@ -64,7 +65,7 @@ export default [
   },
   {
     // The test suite runs in Node, not in the browser.
-    files: ['test/**/*.mjs'],
+    files: ['test/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: {
       globals: {
         process: 'readonly', setImmediate: 'readonly', clearImmediate: 'readonly', global: 'readonly', Buffer: 'readonly'

@@ -201,6 +201,125 @@
     catalogCache.set(doc, { count: scripts.length, list });
     return list;
   }
+  // ---- Repo & branch pickers (v2.9.0) ---------------------------------------------------------
+  // Arena's Agent Mode can work on a GitHub repository: two dialog triggers beside the composer choose
+  // which repository and which branch. They are recognised by their exact icon geometry (taken from
+  // Arena's own markup) combined with the Radix trigger shape — an Arena redesign that renames the icon
+  // becomes a named "picker not found" state, never a guessed button. Everything here drives Arena's own
+  // controls; there is no GitHub API and no second source of truth.
+  const PICKER_ICONS = {
+    repo: 'M4 19V5C4 3.89543 4.89543 3 6 3H19.4C19.7314 3 20 3.26863 20 3.6V16.7143',
+    branch: 'M18 8C19.1046 8 20 7.10457 20 6C20 4.89543 19.1046 4 18 4C16.8954 4 16 4.89543 16 6C16 7.10457 16.8954 8 18 8Z'
+  };
+  const PICKER_KINDS = ['repo', 'branch'];
+  const pickerName = kind => (kind === 'repo' ? 'repository' : 'branch');
+  const compressPath = value => String(value).replace(/\s+/g, ' ').trim();
+  function pickerIconKind(button) {
+    for (const path of button.querySelectorAll('svg path')) {
+      const d = compressPath(path.getAttribute('d') || '');
+      if (d === PICKER_ICONS.repo) return 'repo';
+      if (d === PICKER_ICONS.branch) return 'branch';
+    }
+    return '';
+  }
+  // Both pickers at once: { repo, branch } each { el, label } or null, plus `ambiguous` when the same
+  // picker is visible more than once (two live triggers are a refusal, not a first-match guess).
+  function pickerTriggers(doc = document) {
+    const found = { repo: null, branch: null }, counts = { repo: 0, branch: 0 };
+    refreshRows(doc);
+    for (const el of doc.querySelectorAll('button[aria-haspopup="dialog"][aria-controls]')) {
+      const kind = pickerIconKind(el);
+      if (!kind || !visible(el) || inTranscript(el) ||
+        el.closest('[role="dialog"],[role="alertdialog"],nav,aside,[role="navigation"],[data-sidebar]')) continue;
+      const label = el.querySelector('span.truncate');
+      if (!label) continue;
+      counts[kind]++;
+      if (!found[kind]) found[kind] = { el, label: normalize(label.textContent).slice(0, 120) };
+    }
+    return { repo: found.repo, branch: found.branch, ambiguous: counts.repo > 1 || counts.branch > 1,
+      duplicates: { repo: counts.repo > 1, branch: counts.branch > 1 } };
+  }
+  // Non-throwing snapshot for the panel's chips: which pickers the page shows, their current values and
+  // whether Arena currently allows opening them. A missing picker is reported, never raised.
+  function repoInfo(doc = document) {
+    const empty = () => ({ present: false, value: '', disabled: false });
+    try {
+      const triggers = pickerTriggers(doc);
+      const shape = (entry, kind) => entry && !triggers.duplicates[kind]
+        ? { present: true, value: entry.label, disabled: !enabled(entry.el) || !!entry.el.closest('[inert]') }
+        : empty();
+      return { repo: shape(triggers.repo, 'repo'), branch: shape(triggers.branch, 'branch') };
+    } catch { return { repo: empty(), branch: empty() }; }
+  }
+  // The picker's own popover, found only through the trigger that controls it (aria-controls + open
+  // state), so a different dialog on the page can never be mistaken for it.
+  function pickerDialog(kind, doc = document) {
+    if (!PICKER_KINDS.includes(kind)) return null;
+    const trigger = pickerTriggers(doc)[kind];
+    if (!trigger || trigger.el.getAttribute('data-state') !== 'open') return null;
+    const id = (trigger.el.getAttribute('aria-controls') || '').trim();
+    if (!id || id.length > 80) return null;
+    const dialog = doc.getElementById(id);
+    return dialog && visible(dialog) ? dialog : null;
+  }
+  function pickersOpen(doc = document) {
+    return PICKER_KINDS.filter(kind => !!pickerDialog(kind, doc));
+  }
+  // Option rows: Arena's command list uses role="option"; a plain button list inside a listbox is the
+  // only accepted alternative. Anything else is an unrecognized picker, never a scraped guess.
+  function pickerOptionItems(dialog) {
+    let items = [...dialog.querySelectorAll('[role="option"]')].filter(visible);
+    if (!items.length) {
+      const list = [...dialog.querySelectorAll('[role="listbox"]')].find(visible);
+      items = list ? [...list.querySelectorAll('button,[role="button"]')].filter(visible) : [];
+    }
+    return items;
+  }
+  // Label cap matches pickerTriggers' label cap exactly: the confirmed value must be able to equal what
+  // the trigger later shows, or a long name could never be confirmed.
+  const PICKER_LABEL_MAX = 120;
+  const pickerLabelOf = item => {
+    const truncate = item.querySelector('span.truncate');
+    return normalize((truncate || item).textContent).slice(0, PICKER_LABEL_MAX);
+  };
+  function pickerQueryValue(dialog) {
+    const input = [...dialog.querySelectorAll('input[type="search"],input[type="text"],input:not([type])')].find(visible);
+    return input ? String(input.value || '').slice(0, 120) : '';
+  }
+  function readPickerOptions(dialog) {
+    if (!dialog || !visible(dialog)) fail('PICKER_CLOSED', 'Arena’s picker is not open.');
+    const options = pickerOptionItems(dialog).map(item => {
+      const label = pickerLabelOf(item), full = normalize(item.textContent).slice(0, 400);
+      const meta = full !== label && full.includes(label) ? normalize(full.replace(label, '')).slice(0, 200) : '';
+      return { label, meta, disabled: !enabled(item) || !!item.closest('[inert]') };
+    }).filter(option => option.label);
+    if (!options.length)
+      fail('PICKER_UNRECOGNIZED', 'Arena’s picker opened, but its option list does not match the supported structure. Pick directly in the Arena tab; nothing was clicked.');
+    return { options: options.slice(0, 200), query: pickerQueryValue(dialog) };
+  }
+  // One exact-match click on Arena's own option row. No prefix, fuzzy or case-insensitive matching, and
+  // a duplicate name refuses rather than picking the first.
+  function pickPickerOption(dialog, value) {
+    const want = normalize(value);
+    if (!want || want.length > PICKER_LABEL_MAX) fail('INVALID_PICK', 'Choose one of the options Arena is currently showing.');
+    const matches = pickerOptionItems(dialog)
+      .map(item => ({ item, label: pickerLabelOf(item), full: normalize(item.textContent) }))
+      .filter(entry => entry.label === want || entry.full === want);
+    if (!matches.length) fail('PICKER_NOT_FOUND', 'That option is not in Arena’s current list (it may have been filtered out). Nothing was clicked.');
+    if (matches.length > 1) fail('PICKER_AMBIGUOUS', 'More than one option in Arena’s list carries that name. Pick in the Arena tab; nothing was clicked.');
+    const option = matches[0].item;
+    if (!enabled(option) || option.closest('[inert]')) fail('PICKER_OPTION_DISABLED', 'That option is not available in Arena right now. Nothing was clicked.');
+    option.click(); // Exactly one click on Arena’s own option. Never retried.
+    return matches[0].label;
+  }
+  // One Escape keydown — the same gesture the site itself honours — dispatched only on the recognized
+  // picker dialog. The caller verifies the dialog actually closed; nothing is dispatched twice.
+  function closePickerDialog(dialog) {
+    if (!dialog || !visible(dialog)) return;
+    const win = dialog.ownerDocument.defaultView || globalThis;
+    dialog.dispatchEvent(new win.KeyboardEvent('keydown',
+      { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+  }
   function visible(el) {
     if (!el || !el.isConnected || el.closest('[hidden],[aria-hidden="true"]')) return false;
     for (let p = el; p && p.nodeType === 1; p = p.parentElement) {
@@ -209,6 +328,41 @@
     }
     return !!el.getClientRects().length;
   }
+  // A security verification is transient: the user clears it in the Arena tab and the page returns to
+  // normal. It therefore has to be *observable* separately from the hard blocks in checkBlocks(), so the
+  // capture loop can pause and resume instead of stopping the turn. Non-throwing by construction.
+  const SECURITY_TEXT = /captcha|verify (?:that )?you(?: are|'re) human|verification required|security (?:check|verification)|unusual traffic|checking your browser/i;
+  const SECURITY_FRAME = /recaptcha.*\/bframe|hcaptcha.*challenge|challenges\.cloudflare\.com/i;
+  const isSecurityText = text => SECURITY_TEXT.test(text);
+  function isSecurityFrame(frame) {
+    const src = frame.getAttribute('src') || '', rect = frame.getBoundingClientRect();
+    return SECURITY_FRAME.test(src) && rect.width > 100 && rect.height > 70;
+  }
+  // Returns a short description while a verification is visible, otherwise ''. Never throws, so callers
+  // can poll it safely while tracking a message.
+  function securityNotice(doc = document) {
+    for (const el of doc.querySelectorAll('[role="alert"],[role="dialog"],[data-sonner-toast],h1,h2')) {
+      if (!visible(el) || inTranscript(el)) continue;
+      if (isSecurityText(normalize(el.innerText || el.textContent).slice(0, 3000)))
+        return 'Arena is showing a security verification.';
+    }
+    for (const frame of doc.querySelectorAll('iframe')) {
+      if (visible(frame) && isSecurityFrame(frame)) return 'Arena is showing a security verification.';
+    }
+    return '';
+  }
+  // A security verification can clear while Arena is re-mounting the transcript: the row list is briefly
+  // empty, which the exact-prefix check in matchTurn sees as an unrelated-conversation change. The
+  // accepted message ID is a stronger anchor than the row list, so rebuild the baseline as the rows
+  // before it and let matchTurn re-verify the row and prompt as usual (the same anchor watch() trusts).
+  // Returns false when that anchor is gone, so a genuinely different conversation still stops.
+  function reanchor(tx, doc = document) {
+    if (!tx?.userId) return false;
+    const list = rows(doc), index = list.findIndex(row => row.id === tx.userId && row.user);
+    if (index < 0) return false;
+    tx.baseline = list.slice(0, index).map(row => row.id);
+    return true;
+  }
   // Check UI notices, not chat text. Never copy these notices into a reply.
   function checkBlocks(doc = document) {
     refreshRows(doc);
@@ -216,7 +370,7 @@
       .filter(el => visible(el) && !inTranscript(el));
     for (const el of ui) {
       const text = normalize(el.innerText || el.textContent).slice(0, 3000);
-      if (/captcha|verify (?:that )?you(?: are|'re) human|verification required|security (?:check|verification)|unusual traffic|checking your browser/i.test(text))
+      if (isSecurityText(text))
         fail('SECURITY_CHECK', 'Complete the security verification in the Arena tab yourself. No retry or bypass was attempted. Check whether Arena accepted your prompt before sending again.');
       if (/rate limit|too many requests|quota exceeded|usage limit|try again (?:in|later)|limit reached/i.test(text))
         fail('RATE_LIMIT', 'Arena is limiting requests. Follow the wait time in the Arena tab. No automatic retry was attempted.');
@@ -227,8 +381,7 @@
     }
     for (const frame of doc.querySelectorAll('iframe')) {
       if (!visible(frame)) continue;
-      const src = frame.getAttribute('src') || '', rect = frame.getBoundingClientRect();
-      if ((/recaptcha.*\/bframe|hcaptcha.*challenge|challenges\.cloudflare\.com/i.test(src)) && rect.width > 100 && rect.height > 70)
+      if (isSecurityFrame(frame))
         fail('SECURITY_CHECK', 'A security verification is visible in the Arena tab. Complete it yourself there. No retry or bypass was attempted.');
     }
   }
@@ -451,6 +604,8 @@
     if (!A) fail('ADAPTER_ERROR', 'The attachment policy is unavailable. Nothing was inserted or sent.');
     const checked = A.validateAttachments(pairs);
     if (checked.rejected.length || checked.accepted.length !== pairs.length) fail('INVALID_ATTACHMENT', checked.rejected[0]?.reason || 'One of the files is not supported. Nothing was inserted or sent.');
+    if (checked.accepted.some(file => !A.acceptsFile(target.accept, file)))
+      fail('UPLOAD_TYPE_UNSUPPORTED', 'One of the staged files does not match Arena’s file input. Nothing was inserted or sent.');
     if (pairs.length > 1 && !target.multiple) fail('UPLOAD_MULTIPLE_UNSUPPORTED', `That Arena file input accepts one file at a time. Send ${pairs.length} files separately in the Arena tab; nothing was inserted or sent.`);
     const token = crypto.randomUUID();
     target.setAttribute('data-arena-agent-stage', token);
@@ -596,6 +751,32 @@
     const field = composer(doc), button = sendButton(doc, field);
     return { field, button, inputKind: field.tagName === 'TEXTAREA' ? 'textarea' : 'contenteditable', uploadKind: uploadsFor(field, doc).kind, fileInputCount: fileInputsFor(field, doc).length };
   }
+  // Semantic capability snapshot: which named Arena capabilities this page currently exposes, using the
+  // same primitives the adapter drives. A control that Arena renames or removes then shows up as a named
+  // gap ("unsupported page layout") instead of only surfacing later as a generic error. Pure and
+  // non-throwing — a diagnostic must never be able to break an otherwise usable connection.
+  function capabilities(doc = document) {
+    const safe = fn => { try { return fn(); } catch { return null; } };
+    const field = safe(() => composer(doc));
+    const upload = safe(() => (field ? uploadsFor(field, doc) : { kind: 'none' }));
+    const visibleAny = selector => [...doc.querySelectorAll(selector)].some(visible);
+    return {
+      pageKind: pageKind(doc),
+      mode: safe(() => modeLabel(doc)) || '',
+      checks: {
+        composer: !!field,
+        send: field ? safe(() => !!sendButton(doc, field)) === true : false,
+        transcript: pageKind(doc) === 'direct'
+          ? safe(() => { directRows(doc); return directEls.size > 0; }) === true
+          : agentRowsPresent(doc),
+        questions: visibleAny('[role="radiogroup"][aria-label]'),
+        responsePairs: visibleAny('[aria-roledescription="carousel"]') || visibleAny('.sticky span.font-mono > span.truncate'),
+        reviewPanel: visibleAny('button[aria-label="Close review panel"]'),
+        upload: upload?.kind === 'input',
+        uploadPicker: upload?.kind === 'button-only'
+      }
+    };
+  }
   function preflight(doc = document) {
     const list = conversationReady(doc);
     if (reviewPanel(doc)) fail('REVIEW_PANEL_VISIBLE', 'The task-review panel still covers the composer. Close it in Arena before continuing. No feedback option was selected and no Send click was attempted.');
@@ -639,8 +820,9 @@
       const allowedButtons = new Set([...buttons, ...submits, ...skip]);
       if ([...root.querySelectorAll('button')].filter(visible).some(button => !allowedButtons.has(button))) continue;
       const sensitive = /\b(captcha|verification|password|credential|secret|token|sign[ -]?in|log[ -]?in|permission|approv\w*|authoriz\w*|payment|purchase|delete|destructive|execut\w*)\b|\brun\b.{0,35}\b(command|script|code|bash|shell)\b/i.test([question,...options.map(o=>o.label+' '+o.description)].join(' '));
-      const readOnly = sensitive || options.some(option => option.checked);
-      const data = { rowId: row.getAttribute('data-chat-message-id'), question, options, custom, readOnly,
+      const answered = options.some(option => option.checked);
+      const readOnly = sensitive || answered;
+      const data = { rowId: row.getAttribute('data-chat-message-id'), question, options, custom, readOnly, answered, sensitive,
         reason: sensitive ? 'This may be an approval, sensitive action or security question. Handle it in Arena.' : readOnly ? 'An option is already selected in Arena. Wait there or check its state.' : '' };
       found.push({ root, group, buttons, input: custom ? inputs[0] : null, submit: custom ? submits[0] : null, data, fingerprint: JSON.stringify(data) });
     }
@@ -838,9 +1020,18 @@
       return { row, questions: questionsFor(row.el), tools: toolActivity(row.el), text };
     });
     const cardGroups = item => [...item.row.el.querySelectorAll('[role="radiogroup"]')].filter(group => visible(group) && !group.closest('.prose,pre,code')).length;
-    // Only recognized clarification/tool-only rows may surround the one prose reply. An unanswered
-    // or unrecognized question card is interaction UI, never a competing final reply candidate.
-    const interaction = item => item.questions.length || cardGroups(item) > 0;
+    // v2.8.1: an answered clarification row is history, not a competing reply. After the user picks an
+    // option (here or in Arena), Arena may hide or remove that card while its preamble text stays in the
+    // row. Without remembering it, the old row looks like a plain reply and the new answer makes two,
+    // which used to stop capture with AMBIGUOUS_REPLY. Rows that ever held a recognized card (tracked in
+    // tx.questionRows across scans, or passed back on WATCH resume) stay interaction rows forever, as do
+    // rows that still carry any card remnants outside prose (visible or hidden) for resumes without history.
+    const knownQuestions = new Set(Array.isArray(tx.questionRows) ? tx.questionRows.filter(id => typeof id === 'string') : []);
+    const hasRemnants = el => [...el.querySelectorAll('[role="radiogroup"],button[role="radio"],input[placeholder="Revise options or write your own..."]')]
+      .some(node => !node.closest('.prose,pre,code,nav,aside,[role="dialog"]'));
+    // Only recognized clarification/tool-only rows may surround the one prose reply. An unanswered,
+    // unrecognized or already-answered question card is interaction UI, never a competing final reply candidate.
+    const interaction = item => item.questions.length > 0 || cardGroups(item) > 0 || knownQuestions.has(item.row.id) || hasRemnants(item.row.el);
     const replyLike = item => !item.pair && !item.stale && !interaction(item) && (!!item.text || ended(item.row.el));
     const replies = classified.filter(replyLike);
     if (replies.length > 1) fail('AMBIGUOUS_REPLY', `Multiple ungrouped assistant replies followed this prompt. Read the result in Arena; capture stopped rather than guessing.${rowSummary(added, list.length)}`);
@@ -863,8 +1054,14 @@
       }
     }
     const reply = replies[0];
-    if (reply && tx.assistantId && tx.assistantId !== reply.row.id)
-      fail('AMBIGUOUS_REPLY', 'The assistant message ID changed. Capture stopped.');
+    if (reply && tx.assistantId && tx.assistantId !== reply.row.id) {
+      // The preamble row can look like a plain reply before its cards render (assistantId points at it),
+      // then become a question row once they do. When the previously tracked row is now history, the new
+      // reply takes over; any other ID change is still a hard stop.
+      const prev = classified.find(item => item.row.id === tx.assistantId);
+      if (!prev || (!prev.stale && !prev.pair && !interaction(prev) && !knownQuestions.has(tx.assistantId)))
+        fail('AMBIGUOUS_REPLY', 'The assistant message ID changed. Capture stopped.');
+    }
     const questions = classified.flatMap(item => item.questions);
     if (questions.length > 12) fail('TOO_MANY_QUESTIONS', 'More than twelve clarification cards are visible. Continue in Arena.');
     const liveText = classified.map(item => item.text).filter(Boolean).join('\n\n');
@@ -889,7 +1086,17 @@
       const chosen = choice && choice !== 'skip' && pair.sides.find(side => side.side === choice);
       if (chosen && settled && chosen.done && !running(doc)) { pairDone = true; pairText = chosen.text; pairModel = chosen.label; pairEl = chosen.el; }
     }
-    const complete = pairDone || (!!reply && ended(reply.row.el) && !running(doc) && !questions.length && !classified.some(item => cardGroups(item) > 0));
+    // An answered card (an option already checked in Arena) no longer blocks completion: the agent has
+    // what it asked for and the turn can finish. Unanswered cards (including sensitive ones the panel
+    // never touches) and unrecognized card groups still do.
+    const pendingQuestions = questions.filter(q => !q.data.answered);
+    const pendingCards = classified.some(item => {
+      const groups = cardGroups(item);
+      if (!groups) return false;
+      if (groups > item.questions.length) return true;
+      return item.questions.some(q => !q.data.answered);
+    });
+    const complete = pairDone || (!!reply && ended(reply.row.el) && !running(doc) && !pendingQuestions.length && !pendingCards);
     // The formatted version is only built for a finished reply (it is what the panel keeps).
     const rich = complete ? richOf(pairDone ? pairEl : reply.row.el) : null;
     // v2.8.0: the live preview is formatted too. Rebuilt only when the text changed, at most about twice a
@@ -954,7 +1161,8 @@
     try { return rows(doc).filter(row => row.user).length; } catch { return 0; }
   }
 
-  globalThis.ArenaAgentDOM = { version: '2.8.0', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
+  globalThis.ArenaAgentDOM = { version: '2.9.0', ROW, DomError, fail, visible, checkBlocks, rows, ended, running,
     richOf, userRowText, userRowMatches, composer, sendButton, enabled, reviewPanel, conversationReady, inspectControls, preflight, matchTurn, questionsFor, toolActivity, thinkingStatus, historyTurns, historyCount, answerText, normalize, composerText, writeComposer, composerSummary, fileInputsFor, composerFileInputs, uploadsFor, stageRequestFor, nearComposer, promptMatches,
-    pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide };
+    pageKind, modeLabel, currentModel, modelCatalog, samePage, choiceButtons, choiceSide, capabilities, securityNotice, reanchor,
+    pickerTriggers, repoInfo, pickerDialog, pickersOpen, readPickerOptions, pickPickerOption, closePickerDialog, pickerName };
 })();

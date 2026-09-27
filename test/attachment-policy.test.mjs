@@ -47,7 +47,7 @@ test('accept attribute tokens are checked against the same list', () => {
   assert.equal(A.acceptAllows('file'), true);
   assert.equal(A.acceptAllows('*/*'), true);
   assert.equal(A.acceptAllows('.png,application/zip'), false);
-  assert.equal(A.acceptAllows('image/*'), false);
+  assert.equal(A.acceptAllows('image/*'), true);
   assert.equal(A.isAcceptedToken(''), true);
 });
 
@@ -66,4 +66,23 @@ test('formatBytes never prints a wrong size', () => {
   assert.equal(A.formatBytes(3 * 1048576), '3.0 MB');
   assert.equal(A.formatBytes(NaN), 'unknown size');
   assert.equal(A.formatBytes(-4), 'unknown size');
+});
+
+test('file accept restrictions apply to each file, including MIME aliases and wildcards', () => {
+  assert.equal(A.acceptsFile('.png', file('report.pdf', 'application/pdf', 1)), false);
+  assert.equal(A.acceptsFile('IMAGE/*', file('PHOTO.PNG', 'image/png', 1)), true);
+  assert.equal(A.acceptsFile('.PNG', file('PHOTO.PNG', 'image/png', 1)), true);
+  assert.equal(A.acceptsFile('application/javascript', file('code.js', 'text/javascript', 1)), true);
+  assert.equal(A.acceptsFile('image/*', file('code.js', 'text/javascript', 1)), false);
+  assert.equal(A.acceptsFile('application/zip', file('a.zip', 'application/zip', 1)), false);
+});
+
+test('encoded attachments use exact decoded size at the 8 MiB boundary', () => {
+  for (const size of [A.ATTACHMENT_POLICY.maxBytes - 1, A.ATTACHMENT_POLICY.maxBytes]) {
+    const data = Buffer.alloc(size).toString('base64');
+    assert.equal(A.decodeAttachment({ name: 'a.txt', type: 'text/plain', data }).bytes.byteLength, size);
+  }
+  assert.throws(() => A.decodeAttachment({ name: 'a.txt', type: 'text/plain', data: Buffer.alloc(A.ATTACHMENT_POLICY.maxBytes + 1).toString('base64') }));
+  assert.throws(() => A.decodeAttachment({ name: 'a.txt', type: 'text/plain', data: '!' }));
+  assert.throws(() => A.decodeAttachment({ name: 'a.txt', type: 'text/plain', data: '' }));
 });
