@@ -1,6 +1,6 @@
 # Spec: Expressive Liquid Glass UI for Arena Auto Chat
 
-Status: **approved design contract and UI plan — T1 visual preview awaiting owner review**. This is a distinct visual initiative on the session's fixed branch and existing draft PR #22. It supersedes the *visual direction* proposed in `docs/ideas/instrument-panel-ui-revamp.md` (flat/no-blur/IBM Plex), not the repository's accessibility, privacy, packaging or fail-closed rules. That older idea document remains intact as historical context.
+Status: **approved design contract, UI plan and T1 visual preview — T2 production work pending**. This is a distinct visual initiative on the session's fixed branch and existing draft PR #22. It supersedes the *visual direction* proposed in `docs/ideas/instrument-panel-ui-revamp.md` (flat/no-blur/IBM Plex), not the repository's accessibility, privacy, packaging or fail-closed rules. That older idea document remains intact as historical context.
 
 ## Objective
 

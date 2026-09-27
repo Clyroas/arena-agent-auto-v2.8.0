@@ -1,17 +1,17 @@
 # Expressive Liquid Glass UI — Task Checklist
 
-Status: **approved task list — T1 preview built, awaiting owner visual review before T2**. Companion to [liquid-glass-plan.md](liquid-glass-plan.md). This is not the unfinished `tasks/todo.md` or `tasks/skill-delivery-todo.md`. Production UI work remains pending.
+Status: **approved task list — T1 preview approved by owner; T2 production tokens pending**. Companion to [liquid-glass-plan.md](liquid-glass-plan.md). This is not the unfinished `tasks/todo.md` or `tasks/skill-delivery-todo.md`. Production UI work remains pending.
 
-### T1 — Preview the material direction against the actual panel (dev-only; awaiting visual review)
+### T1 — Preview the material direction against the actual panel (dev-only) ✅
 - [x] Opt-in `/dev/preview.html?design=glass` renders the real panel HTML/JS with a preview-only material stylesheet; default dev preview and packaged extension remain unchanged.
-- [ ] Show realistic ready/streaming/error with readable message/card/toolbar/composer at 360 px and wide floating sizes, light and dark; **owner browser review pending** before T2.
+- [x] Show realistic ready/streaming/error with readable message/card/toolbar/composer at 360 px and wide floating sizes, light and dark; owner approved the visual direction before T2. Browser automation remains unverified due to Chromium download failure.
 - [x] Test that the opt-in CSS is dev-only and no preview path enters the release allow-list.
 - Dependencies: approved spec and plan. Candidate files: `dev/preview.html`, `dev/preview.js`, `dev/liquid-glass-prototype.css`, `test/ui-preview.test.mjs` (4).
 - Verify: `node --test test/ui-preview.test.mjs`; `npm run check`; browser/manual owner review on dev preview URL.
 
-### Checkpoint V1 — Owner visual decision
-- [ ] Owner explicitly approves the actual browser preview (or revises the spec before production changes).
-- [ ] Existing default preview and release artifact remain visually/behaviorally unchanged.
+### Checkpoint V1 — Owner visual decision ✅
+- [x] Owner explicitly approved the live preview's visual direction before production changes.
+- [x] Existing default preview and release artifact remain visually/behaviorally unchanged; package audit confirms no dev-only study files ship.
 
 ### T2 — Establish accessible material tokens
 - [ ] Define light/dark base, raised, floating and edge tokens in production CSS while preserving four accents and saved themes/sizes.

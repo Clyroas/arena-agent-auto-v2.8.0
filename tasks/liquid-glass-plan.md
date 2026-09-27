@@ -1,6 +1,6 @@
 # Implementation Plan: Expressive Liquid Glass UI
 
-Status: **approved UI plan — T1 dev-only preview awaiting owner visual approval; production UI unchanged**. Source of truth: [SPEC-liquid-glass-ui.md](../SPEC-liquid-glass-ui.md). Detailed tasks: [liquid-glass-todo.md](liquid-glass-todo.md).
+Status: **approved UI plan — T1 dev-only preview approved by owner; production UI unchanged, T2 pending**. Source of truth: [SPEC-liquid-glass-ui.md](../SPEC-liquid-glass-ui.md). Detailed tasks: [liquid-glass-todo.md](liquid-glass-todo.md).
 
 This is a distinct visual initiative on the fixed session branch and draft PR #22 (owner approved sharing that PR). The unfinished `tasks/plan.md`, `tasks/todo.md`, `tasks/skill-delivery-plan.md` and `tasks/skill-delivery-todo.md` remain untouched. Do not use `/build`'s default task target for this initiative: explicitly use these two UI files.
 
