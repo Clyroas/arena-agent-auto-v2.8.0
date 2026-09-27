@@ -4,9 +4,9 @@ Status: **approved task list; execute one task at a time**. Companion to [skill-
 
 ## `skill-catalog`
 
-### T1 — Record permitted source/licensing contract
-- [ ] Pin the Anthropic commit and list only the 14 per-skill Apache-2.0 examples (no `docx`, `pdf`, `pptx`, `xlsx`, or unverified `doc-coauthoring`); retain license/notice provenance.
-- [ ] Add a failing source-audit test for missing/unlicensed IDs and accidental inclusion of restricted material.
+### T1 — Record permitted source/licensing contract ✅
+- [x] Pin the Anthropic commit and list only the 14 per-skill Apache-2.0 examples (no `docx`, `pdf`, `pptx`, `xlsx`, or unverified `doc-coauthoring`); retain license/notice provenance.
+- [x] Add a failing source-audit test for missing/unlicensed IDs and accidental inclusion of restricted material.
 - Dependencies: none. Candidate files: `skill-sources/manifest.json`, `skill-sources/LICENSE-ANTHROPIC.txt`, `test/skill-catalog-source.test.mjs` (3).
 - Verify: `node --test test/skill-catalog-source.test.mjs`; `npm run check`.
 
