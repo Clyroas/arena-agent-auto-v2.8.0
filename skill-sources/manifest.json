@@ -1,0 +1,29 @@
+{
+  "source": "https://github.com/anthropics/skills",
+  "revision": "33375500bcea98d610eb30ce10ac4e59b89c390d",
+  "license": "Apache-2.0",
+  "licenseFile": "skill-sources/LICENSE-ANTHROPIC.txt",
+  "skills": [
+    "academy-guide",
+    "algorithmic-art",
+    "brand-guidelines",
+    "canvas-design",
+    "claude-api",
+    "discernment-nudge",
+    "frontend-design",
+    "internal-comms",
+    "mcp-builder",
+    "skill-creator",
+    "slack-gif-creator",
+    "theme-factory",
+    "web-artifacts-builder",
+    "webapp-testing"
+  ],
+  "excluded": {
+    "doc-coauthoring": "No verified redistribution license at the pinned revision.",
+    "docx": "Per-skill proprietary license restricts copying and distribution.",
+    "pdf": "Per-skill proprietary license restricts copying and distribution.",
+    "pptx": "Per-skill proprietary license restricts copying and distribution.",
+    "xlsx": "Per-skill proprietary license restricts copying and distribution."
+  }
+}
