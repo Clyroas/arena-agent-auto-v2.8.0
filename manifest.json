@@ -6,7 +6,8 @@
   "minimum_chrome_version": "116",
   "permissions": [
     "sidePanel",
-    "scripting"
+    "scripting",
+    "webNavigation"
   ],
   "host_permissions": [
     "https://arena.ai/*"
@@ -43,6 +44,7 @@
         "https://arena.ai/*"
       ],
       "js": [
+        "content-hardening.js",
         "attachment-policy.js",
         "agent-dom.js",
         "agent-content.js"

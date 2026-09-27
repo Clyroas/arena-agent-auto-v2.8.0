@@ -134,7 +134,15 @@ globalThis.chrome = {
 // ---------- load the real panel -------------------------------------------------
 const panelUrl = new URL('../panel.html', import.meta.url);
 const asset = path => new URL(path, panelUrl).href;
+const glassPreview = new URLSearchParams(location.search).get('design') === 'glass';
 document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: asset('../panel.css') }));
+if (glassPreview) {
+  document.documentElement.dataset.preview = 'glass';
+  document.title = 'Liquid Glass study · Arena Auto Chat (dev only)';
+  document.head.append(Object.assign(document.createElement('link'), {
+    rel: 'stylesheet', href: new URL('./liquid-glass-prototype.css', import.meta.url).href
+  }));
+}
 document.head.append(Object.assign(document.createElement('base'), { href: new URL('../', panelUrl).href }));
 
 const load = (src, type = '') => new Promise((resolve, reject) => {
@@ -173,6 +181,38 @@ function fail(error) {
 // ---------- connect to the fake tab ---------------------------------------------
 const $ = id => document.getElementById(id);
 try { await boot(); } catch (error) { fail(error); throw error; }
+if (glassPreview) {
+  const bar = document.getElementById('dev-bar');
+  bar.dataset.glassPreview = 'true';
+  bar.dataset.collapsed = 'true';
+  const label = document.createElement('span');
+  label.className = 'dev-label glass-label'; label.textContent = 'Liquid Glass · study only';
+  const theme = document.createElement('button');
+  theme.type = 'button'; theme.className = 'glass-theme';
+  theme.setAttribute('aria-label', 'Switch preview between light and dark themes');
+  const syncTheme = () => { theme.textContent = document.documentElement.dataset.theme === 'dark' ? 'Light view' : 'Dark view'; };
+  syncTheme();
+  theme.addEventListener('click', () => {
+    const select = document.getElementById('theme-select');
+    select.value = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    syncTheme();
+  });
+  const toggle = document.createElement('button');
+  toggle.type = 'button'; toggle.className = 'glass-toggle';
+  const syncToggle = () => {
+    const open = bar.dataset.collapsed !== 'true';
+    toggle.textContent = open ? 'Hide controls' : 'Show controls';
+    toggle.setAttribute('aria-expanded', String(open));
+  };
+  syncToggle();
+  toggle.addEventListener('click', () => { bar.dataset.collapsed = String(bar.dataset.collapsed !== 'true'); syncToggle(); });
+  bar.prepend(label, theme, toggle);
+  bar.addEventListener('click', event => {
+    if (!event.target.closest('button[data-act]')) return;
+    bar.dataset.collapsed = 'true'; syncToggle();
+  });
+}
 const until = async (predicate, tries = 100) => { for (let i = 0; i < tries; i++) { if (predicate()) return true; await wait(50); } return false; };
 await until(() => $('tabs').value === '1');
 // Connection controls live in the sheet, which starts closed so the chat is the first surface.
